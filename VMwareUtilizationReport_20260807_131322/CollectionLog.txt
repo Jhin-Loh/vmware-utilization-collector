@@ -1,0 +1,51 @@
+﻿**********************
+Windows PowerShell transcript start
+Start time: 20260807131322
+Username: COLIN\Colin
+RunAs User: COLIN\Colin
+Configuration Name: 
+Machine: COLIN (Microsoft Windows NT 10.0.26200.0)
+Host Application: C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -Command Import-Module 'c:\Users\Colin\.vscode\extensions\ms-vscode.powershell-2025.4.0\modules\PowerShellEditorServices\PowerShellEditorServices.psd1'; Start-EditorServices -HostName 'Visual Studio Code Host' -HostProfileId 'Microsoft.VSCode' -HostVersion '2025.4.0' -BundledModulesPath 'c:\Users\Colin\.vscode\extensions\ms-vscode.powershell-2025.4.0\modules' -EnableConsoleRepl -StartupBanner "PowerShell Extension v2025.4.0
+Copyright (c) Microsoft Corporation.
+
+https://aka.ms/vscode-powershell
+Type 'help' to get help.
+" -LogLevel 'Warning' -LogPath 'c:\Users\Colin\AppData\Roaming\Code\logs\20260807T125241\window1\exthost\ms-vscode.powershell' -SessionDetailsPath 'c:\Users\Colin\AppData\Roaming\Code\User\globalStorage\ms-vscode.powershell\sessions\PSES-VSCode-10588-115944.json' -FeatureFlags @() 
+Process ID: 19728
+PSVersion: 5.1.26100.8972
+PSEdition: Desktop
+PSCompatibleVersions: 1.0, 2.0, 3.0, 4.0, 5.0, 5.1.26100.8972
+BuildVersion: 10.0.26100.8972
+CLRVersion: 4.0.30319.42000
+WSManStackVersion: 3.0
+PSRemotingProtocolVersion: 2.3
+SerializationVersion: 1.1.0.1
+**********************
+=== VMware utilization collection ===
+vCenter        : 192.168.149.128
+Requested window: 07/24/2026 13:13:22  ->  08/07/2026 13:13:22
+Output folder  : E:\Projects\AusPost\vmware-utilization-collector\VMwareUtilizationReport_20260807_131322
+
+Connecting to 192.168.149.128 ...
+Connected as root to standalone ESXi host (read-only session).
+Target VM scope: 1 VM(s).
+WARNING: Connected directly to ESXi. The requested -Days/-StartDate range is unavailable; collecting up to the latest 60 minute(s) of real-time samples instead.
+
+Collection plan:
+  Real-time samples (up to 60 minutes)
+
+
+=== Collection complete ===
+VMs processed        : 1
+Summary CSV          : E:\Projects\AusPost\vmware-utilization-collector\VMwareUtilizationReport_20260807_131322\UtilizationSummary.csv
+
+Top 10 VMs by average CPU utilization:
+
+VMName         CPU_Pct_Avg Mem_Pct_Avg DiskTotalIOPS_Avg NetThroughput_KBps_Avg
+------         ----------- ----------- ----------------- ----------------------
+WIN-DEMO-APP01        0.35         1.3                                        0
+Disconnected from 192.168.149.128.
+**********************
+Windows PowerShell transcript end
+End time: 20260807131327
+**********************

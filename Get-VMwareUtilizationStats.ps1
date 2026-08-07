@@ -1,9 +1,10 @@
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true, HelpMessage = "FQDN or IP address of the vCenter Server.")]
+    [Parameter(Mandatory = $true, HelpMessage = "FQDN or IP address of the vCenter Server or standalone ESXi host.")]
+    [Alias('VIServer')]
     [string]$VCenterServer,
 
-    [Parameter(HelpMessage = "Read-only vCenter credential. If omitted, you will be prompted securely.")]
+    [Parameter(HelpMessage = "Read-only vCenter or ESXi credential. If omitted, you will be prompted securely.")]
     [PSCredential]$Credential,
 
     [Parameter(HelpMessage = "Number of days of history to collect, ending at -EndDate. Ignored if -StartDate is supplied.")]
@@ -26,7 +27,7 @@ param(
     [switch]$IncludePoweredOffVMs,
 
     [Parameter(HelpMessage = "Folder to write the CSV report(s) and run log to.")]
-    [string]$OutputFolder = (Join-Path $PSScriptRoot "VMwareUtilizationReport_$(Get-Date -Format 'yyyyMMdd_HHmmss')"),
+    [string]$OutputFolder,
 
     [Parameter(HelpMessage = "Also export every individual raw sample (large output) in addition to the per-VM summary.")]
     [switch]$IncludeRawSamples,
@@ -35,12 +36,20 @@ param(
     [ValidateRange(1, 100)]
     [int]$BatchSize = 15,
 
+    [Parameter(HelpMessage = "Maximum recent real-time window to retrieve when connected directly to standalone ESXi.")]
+    [ValidateRange(1, 60)]
+    [int]$RealtimeMinutes = 60,
+
     [Parameter(HelpMessage = "Set PowerCLI to ignore untrusted/self-signed certificate errors for this session only.")]
     [switch]$AllowSelfSignedCertificate,
 
     [Parameter(HelpMessage = "Automatically install VMware.PowerCLI (current user scope) if missing, without prompting.")]
     [switch]$AutoInstallPowerCLI
 )
+
+if ([string]::IsNullOrWhiteSpace($OutputFolder)) {
+    $OutputFolder = Join-Path -Path $PSScriptRoot -ChildPath "VMwareUtilizationReport_$(Get-Date -Format 'yyyyMMdd_HHmmss')"
+}
 
 function Test-PowerCLIAvailability {
     [CmdletBinding()]
@@ -86,7 +95,9 @@ function Get-StatIntervalPlan {
 
         if ($segmentStart -lt $cursor) {
             $plan.Add([PSCustomObject]@{
+                    Mode                  = 'Historical'
                     IntervalMins = [int]($iv.SamplingPeriod / 60)
+                    SampleIntervalSeconds = [int]$iv.SamplingPeriod
                     Level        = $iv.Level
                     Start        = $segmentStart
                     Finish       = $cursor
@@ -171,7 +182,7 @@ try {
     }
 
     if (-not $Credential) {
-        $Credential = Get-Credential -Message "Enter READ-ONLY vCenter credentials for $VCenterServer"
+        $Credential = Get-Credential -Message "Enter read-only vCenter or ESXi credentials for $VCenterServer"
     }
 
     Write-Host "Connecting to $VCenterServer ..."
@@ -179,14 +190,22 @@ try {
         $viConnection = Connect-VIServer -Server $VCenterServer -Credential $Credential -ErrorAction Stop
     }
     catch {
-        throw "Failed to connect to '$VCenterServer'. Verify the server name, that the account has at least the vCenter 'Read-Only' role, and (if using a self-signed certificate) consider -AllowSelfSignedCertificate. Original error: $($_.Exception.Message)"
+        throw "Failed to connect to '$VCenterServer'. Verify the server name, that the account has read-only access, and (if using a self-signed certificate) consider -AllowSelfSignedCertificate. Original error: $($_.Exception.Message)"
     }
-    Write-Host "Connected as $($viConnection.User) (read-only session)." -ForegroundColor Green
+    $serviceInstance = Get-View -Server $viConnection -Id 'ServiceInstance'
+    $isStandaloneEsxi = $serviceInstance.Content.About.ApiType -eq 'HostAgent'
+    $endpointType = if ($isStandaloneEsxi) { 'standalone ESXi host' } else { 'vCenter Server' }
+    Write-Host "Connected as $($viConnection.User) to $endpointType (read-only session)." -ForegroundColor Green
 
     # Resolve target VM scope
     $vmParams = @{ Server = $viConnection }
     if ($ClusterName) {
-        $vmParams['Location'] = Get-Cluster -Name $ClusterName -Server $viConnection -ErrorAction Stop
+        if ($isStandaloneEsxi) {
+            Write-Warning 'ClusterName is ignored when connected directly to a standalone ESXi host.'
+        }
+        else {
+            $vmParams['Location'] = Get-Cluster -Name $ClusterName -Server $viConnection -ErrorAction Stop
+        }
     }
     if ($VMName) {
         $vmParams['Name'] = $VMName
@@ -202,34 +221,55 @@ try {
 
     # Build a VMHost -> Cluster lookup once, to avoid a per-VM Get-Cluster call
     $clusterMap = @{}
-    try {
-        foreach ($cl in (Get-Cluster -Server $viConnection -ErrorAction Stop)) {
-            foreach ($vmhost in ($cl | Get-VMHost -Server $viConnection -ErrorAction Stop)) {
-                $clusterMap[$vmhost.Name] = $cl.Name
+    if (-not $isStandaloneEsxi) {
+        try {
+            foreach ($cl in (Get-Cluster -Server $viConnection -ErrorAction Stop)) {
+                foreach ($vmhost in ($cl | Get-VMHost -Server $viConnection -ErrorAction Stop)) {
+                    $clusterMap[$vmhost.Name] = $cl.Name
+                }
             }
         }
-    }
-    catch {
-        Write-Warning "Could not fully resolve cluster membership; Cluster column may show '(unknown)'. $_"
+        catch {
+            Write-Warning "Could not fully resolve cluster membership; Cluster column may show '(unknown)'. $_"
+        }
     }
 
-    # Read the ACTUAL configured historical statistics intervals from vCenter (read-only)
-    $serviceInstance = Get-View -Server $viConnection -Id 'ServiceInstance'
+    # vCenter stores historical rollups. A standalone ESXi host exposes only its short real-time window.
     $perfManager = Get-View -Server $viConnection -Id $serviceInstance.Content.PerfManager
-    $historicalIntervals = $perfManager.HistoricalInterval
-
-    $intervalPlan = Get-StatIntervalPlan -StartDate $StartDate -EndDate $EndDate -HistoricalIntervals $historicalIntervals
-    if ($intervalPlan.Count -eq 0) {
-        throw "No enabled historical statistics intervals were found on '$VCenterServer'; cannot collect historical performance data."
+    if ($isStandaloneEsxi) {
+        $realtimeSampleSeconds = 20
+        $realtimeMaxSamples = [int][math]::Ceiling(($RealtimeMinutes * 60) / $realtimeSampleSeconds)
+        $intervalPlan = @([PSCustomObject]@{
+                Mode                  = 'Realtime'
+                IntervalMins          = 0
+                SampleIntervalSeconds = $realtimeSampleSeconds
+                Level                 = 'n/a'
+                Start                 = $EndDate.AddMinutes(-$RealtimeMinutes)
+                Finish                = $EndDate
+                MaxSamples            = $realtimeMaxSamples
+            })
+        Write-Warning "Connected directly to ESXi. The requested -Days/-StartDate range is unavailable; collecting up to the latest $RealtimeMinutes minute(s) of real-time samples instead."
+    }
+    else {
+        $historicalIntervals = $perfManager.HistoricalInterval
+        $intervalPlan = Get-StatIntervalPlan -StartDate $StartDate -EndDate $EndDate -HistoricalIntervals $historicalIntervals
+        if ($intervalPlan.Count -eq 0) {
+            throw "No enabled historical statistics intervals were found on '$VCenterServer'; cannot collect historical performance data."
+        }
     }
 
     Write-Host ""
-    Write-Host "Collection plan (vCenter's actual retained granularity):" -ForegroundColor Cyan
+    Write-Host "Collection plan:" -ForegroundColor Cyan
     foreach ($seg in $intervalPlan) {
-        Write-Host ("  {0,4} min samples (level {1})  :  {2}  ->  {3}" -f $seg.IntervalMins, $seg.Level, $seg.Start, $seg.Finish)
+        if ($seg.Mode -eq 'Realtime') {
+            Write-Host ("  Real-time samples (up to {0} minutes)" -f $RealtimeMinutes)
+        }
+        else {
+            Write-Host ("  {0,4} min samples (level {1})  :  {2}  ->  {3}" -f $seg.IntervalMins, $seg.Level, $seg.Start, $seg.Finish)
+        }
     }
     $actualEarliest = $intervalPlan[0].Start
-    if ($actualEarliest -gt $StartDate) {
+    if (-not $isStandaloneEsxi -and $actualEarliest -gt $StartDate) {
         Write-Warning "Requested start ($StartDate) is older than what vCenter's statistics retention currently keeps. Actual data coverage begins at $actualEarliest."
     }
     Write-Host ""
@@ -251,13 +291,20 @@ try {
         foreach ($batch in $batches) {
             $batchIndex++
             $step++
+            $status = if ($segment.Mode -eq 'Realtime') { "Real-time batch $batchIndex of $($batches.Count)" } else { "Interval $($segment.IntervalMins) min - batch $batchIndex of $($batches.Count)" }
             Write-Progress -Activity "Collecting VMware utilization statistics" `
-                -Status "Interval $($segment.IntervalMins) min — batch $batchIndex of $($batches.Count)" `
+                -Status $status `
                 -PercentComplete ([math]::Min(100, ($step / $totalSteps) * 100))
 
             try {
-                $statResults = Get-Stat -Entity $batch -Stat $StatIds -Start $segment.Start -Finish $segment.Finish `
-                    -IntervalMins $segment.IntervalMins -Instance '' -Server $viConnection -ErrorAction Stop
+                if ($segment.Mode -eq 'Realtime') {
+                    $statResults = Get-Stat -Entity $batch -Stat $StatIds -Realtime -MaxSamples $segment.MaxSamples `
+                        -Instance '' -Server $viConnection -ErrorAction Stop
+                }
+                else {
+                    $statResults = Get-Stat -Entity $batch -Stat $StatIds -Start $segment.Start -Finish $segment.Finish `
+                        -IntervalMins $segment.IntervalMins -Instance '' -Server $viConnection -ErrorAction Stop
+                }
             }
             catch {
                 Write-Warning "Batch $batchIndex ($($segment.Start) -> $($segment.Finish)) failed: $($_.Exception.Message)"
@@ -278,7 +325,8 @@ try {
 
                 $value = [double]$stat.Value
                 if ($statDef.RollupType -eq 'summation') {
-                    $value = $value / ($segment.IntervalMins * 60)
+                    $sampleIntervalSeconds = if ($stat.IntervalSecs -gt 0) { $stat.IntervalSecs } else { $segment.SampleIntervalSeconds }
+                    $value = $value / $sampleIntervalSeconds
                 }
 
                 $key = "$($stat.Entity)|$($stat.MetricId)"
@@ -296,7 +344,7 @@ try {
     $summaryRows = foreach ($vm in $targetVMs) {
         $row = [ordered]@{
             VMName        = $vm.Name
-            Cluster       = if ($clusterMap.ContainsKey($vm.VMHost.Name)) { $clusterMap[$vm.VMHost.Name] } else { '(unknown)' }
+            Cluster       = if ($isStandaloneEsxi) { '(standalone ESXi)' } elseif ($clusterMap.ContainsKey($vm.VMHost.Name)) { $clusterMap[$vm.VMHost.Name] } else { '(unknown)' }
             VMHost        = $vm.VMHost.Name
             PowerState    = $vm.PowerState.ToString()
             NumCPU        = $vm.NumCpu
