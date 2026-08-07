@@ -36,7 +36,10 @@ param(
     [ValidateRange(1, 100)]
     [int]$BatchSize = 15,
 
-    [Parameter(HelpMessage = "Maximum recent real-time window to retrieve when connected directly to standalone ESXi.")]
+    [Parameter(HelpMessage = "Collect retained real-time samples instead of historical rollups. Standalone ESXi always uses real-time mode.")]
+    [switch]$Realtime,
+
+    [Parameter(HelpMessage = "Maximum recent real-time window to retrieve in real-time mode.")]
     [ValidateRange(1, 60)]
     [int]$RealtimeMinutes = 60,
 
@@ -236,8 +239,18 @@ try {
 
     # vCenter stores historical rollups. A standalone ESXi host exposes only its short real-time window.
     $perfManager = Get-View -Server $viConnection -Id $serviceInstance.Content.PerfManager
-    if ($isStandaloneEsxi) {
+    if ($isStandaloneEsxi -or $Realtime) {
         $realtimeSampleSeconds = 20
+        try {
+            $providerSummary = $perfManager.QueryPerfProviderSummary($targetVMs[0].ExtensionData.MoRef)
+            if ($providerSummary.RefreshRate -gt 0) {
+                $realtimeSampleSeconds = [int]$providerSummary.RefreshRate
+            }
+        }
+        catch {
+            Write-Warning "Could not query the real-time refresh rate; assuming 20 seconds for IOPS conversion. $($_.Exception.Message)"
+        }
+
         $realtimeMaxSamples = [int][math]::Ceiling(($RealtimeMinutes * 60) / $realtimeSampleSeconds)
         $intervalPlan = @([PSCustomObject]@{
                 Mode                  = 'Realtime'
@@ -248,7 +261,12 @@ try {
                 Finish                = $EndDate
                 MaxSamples            = $realtimeMaxSamples
             })
-        Write-Warning "Connected directly to ESXi. The requested -Days/-StartDate range is unavailable; collecting up to the latest $RealtimeMinutes minute(s) of real-time samples instead."
+        if ($isStandaloneEsxi) {
+            Write-Warning "Connected directly to ESXi. The requested -Days/-StartDate range is unavailable; collecting up to the latest $RealtimeMinutes minute(s) of real-time samples instead."
+        }
+        else {
+            Write-Host "Real-time mode selected; -Days, -StartDate and -EndDate are ignored." -ForegroundColor Yellow
+        }
     }
     else {
         $historicalIntervals = $perfManager.HistoricalInterval
@@ -262,21 +280,20 @@ try {
     Write-Host "Collection plan:" -ForegroundColor Cyan
     foreach ($seg in $intervalPlan) {
         if ($seg.Mode -eq 'Realtime') {
-            Write-Host ("  Real-time samples (up to {0} minutes)" -f $RealtimeMinutes)
+            Write-Host ("  {0}-second real-time samples (up to {1} minutes)" -f $seg.SampleIntervalSeconds, $RealtimeMinutes)
         }
         else {
             Write-Host ("  {0,4} min samples (level {1})  :  {2}  ->  {3}" -f $seg.IntervalMins, $seg.Level, $seg.Start, $seg.Finish)
         }
     }
     $actualEarliest = $intervalPlan[0].Start
-    if (-not $isStandaloneEsxi -and $actualEarliest -gt $StartDate) {
+    if (-not $isStandaloneEsxi -and -not $Realtime -and $actualEarliest -gt $StartDate) {
         Write-Warning "Requested start ($StartDate) is older than what vCenter's statistics retention currently keeps. Actual data coverage begins at $actualEarliest."
     }
     Write-Host ""
 
-    # Note: true 20-second real-time samples are only kept for ~1 hour by vCenter and are NOT
-    # used here; the finest segment above (typically 5-minute) is the best available granularity
-    # for a multi-day/multi-week window.
+    # Real-time samples are short-retention data (normally 20-second granularity). Historical
+    # mode uses vCenter's retained rollup intervals for multi-day or multi-week windows.
 
     $summaryAccumulator = @{}
     $vmsWithData = [System.Collections.Generic.HashSet[string]]::new()
