@@ -254,11 +254,11 @@ function Get-VMInventoryData {
     }
 
     [PSCustomObject]@{
-        IPAddresses    = $ipAddresses -join '; '
-        OSName         = [string]$osName
-        OSVersion      = [string]$osVersion
-        OSArchitecture = $osArchitecture
-        BootType       = $firmware
+        IPAddresses     = $ipAddresses -join '; '
+        OSName          = [string]$osName
+        OSVersion       = [string]$osVersion
+        OSArchitecture  = $osArchitecture
+        BootType        = $firmware
         NetworkAdapters = [int]$VM.ExtensionData.Summary.Config.NumEthernetCards
         NumberOfDisks   = [int]$VM.ExtensionData.Summary.Config.NumVirtualDisks
         StorageInUseGB  = $storageInUseGB
@@ -380,7 +380,7 @@ try {
         catch {
             Write-Warning "Could not query the real-time refresh rate; assuming 20 seconds for IOPS conversion. $($_.Exception.Message)"
         }
-    # Calculates how many samples are needed to cover the requested number of minutes.
+        # Calculates how many samples are needed to cover the requested number of minutes.
         $realtimeMaxSamples = [int][math]::Ceiling(($RealtimeMinutes * 60) / $realtimeSampleSeconds)
         $intervalPlan = @([PSCustomObject]@{
                 Mode                  = 'Realtime'
@@ -448,12 +448,12 @@ try {
             try {
                 if ($segment.Mode -eq 'Realtime') {
                     $statResults = @(Get-Stat -Entity $batch -Stat $StatIds -Realtime -MaxSamples $segment.MaxSamples `
-                        -Instance '' -Server $viConnection -ErrorAction Stop
+                            -Instance '' -Server $viConnection -ErrorAction Stop
                     )
                 }
                 else {
                     $statResults = @(Get-Stat -Entity $batch -Stat $StatIds -Start $segment.Start -Finish $segment.Finish `
-                        -IntervalMins $segment.IntervalMins -Instance '' -Server $viConnection -ErrorAction Stop
+                            -IntervalMins $segment.IntervalMins -Instance '' -Server $viConnection -ErrorAction Stop
                     )
                 }
             }
@@ -467,11 +467,11 @@ try {
             try {
                 if ($segment.Mode -eq 'Realtime') {
                     $perDiskStatResults = @(Get-Stat -Entity $batch -Stat $PerDiskStatIds -Realtime -MaxSamples $segment.MaxSamples `
-                        -Server $viConnection -ErrorAction Stop)
+                            -Server $viConnection -ErrorAction Stop)
                 }
                 else {
                     $perDiskStatResults = @(Get-Stat -Entity $batch -Stat $PerDiskStatIds -Start $segment.Start -Finish $segment.Finish `
-                        -IntervalMins $segment.IntervalMins -Server $viConnection -ErrorAction Stop)
+                            -IntervalMins $segment.IntervalMins -Server $viConnection -ErrorAction Stop)
                 }
             }
             catch {
@@ -529,29 +529,29 @@ try {
     $summaryRows = foreach ($vm in $targetVMs) {
         $inventory = Get-VMInventoryData -VM $vm
         $row = [ordered]@{
-            'Server name'                                = $vm.Name
-            'Cluster'                                    = if ($isStandaloneEsxi) { '(standalone ESXi)' } elseif ($clusterMap.ContainsKey($vm.VMHost.Name)) { $clusterMap[$vm.VMHost.Name] } else { '(unknown)' }
-            'IP addresses'                               = $vm.VMHost.Name
-            'PowerState'                                 = $vm.PowerState.ToString()
-            'Cores'                                      = $vm.NumCpu
-            'Memory (In MB)'                             = [int]$vm.ExtensionData.Config.Hardware.MemoryMB
-            'OS name'                                    = $inventory.OSName
-            'OS version'                                 = $inventory.OSVersion
-            'OS architecture'                            = $inventory.OSArchitecture
-            'Server type'                                = 'Virtual'
-            'Hypervisor'                                 = 'VMware'
-            'CPU utilization percentage average'         = $null
-            'CPU utilization percentage maximum'         = $null
-            'Memory utilization percentage average'      = $null
-            'Memory utilization percentage maximum'      = $null
-            'Network adapters'                           = $inventory.NetworkAdapters
+            'Server name'                                    = $vm.Name
+            'Cluster'                                        = if ($isStandaloneEsxi) { '(standalone ESXi)' } elseif ($clusterMap.ContainsKey($vm.VMHost.Name)) { $clusterMap[$vm.VMHost.Name] } else { '(unknown)' }
+            'IP addresses'                                   = $inventory.IPAddresses
+            'PowerState'                                     = $vm.PowerState.ToString()
+            'Cores'                                          = $vm.NumCpu
+            'Memory (In MB)'                                 = [int]$vm.ExtensionData.Config.Hardware.MemoryMB
+            'OS name'                                        = $inventory.OSName
+            'OS version'                                     = $inventory.OSVersion
+            'OS architecture'                                = $inventory.OSArchitecture
+            'Server type'                                    = 'Virtual'
+            'Hypervisor'                                     = 'Vmware'
+            'CPU utilization percentage average'             = $null
+            'CPU utilization percentage maximum'             = $null
+            'Memory utilization percentage average'          = $null
+            'Memory utilization percentage maximum'          = $null
+            'Network adapters'                               = $inventory.NetworkAdapters
             'Network In throughput average (MB per second)'  = $null
             'Network In throughput maximum (MB per second)'  = $null
             'Network Out throughput average (MB per second)' = $null
             'Network Out throughput maximum (MB per second)' = $null
-            'Boot Type'                                  = $inventory.BootType
-            'Number of disks'                            = $inventory.NumberOfDisks
-            'Storage in use (In GB)'                     = $inventory.StorageInUseGB
+            'Boot Type'                                      = $inventory.BootType
+            'Number of disks'                                = $inventory.NumberOfDisks
+            'Storage in use (In GB)'                         = $inventory.StorageInUseGB
         }
 
         foreach ($def in $StatDefinitions) {
@@ -582,8 +582,9 @@ try {
         $virtualDisks = @($allDevices | Where-Object {
                 $_.DeviceInfo.Label -like 'Hard disk *' -and $null -ne $_.CapacityInKB
             } | Sort-Object @{ Expression = {
-                        if ($_.DeviceInfo.Label -match '(\d+)$') { [int]$Matches[1] } else { [int]::MaxValue }
-                    } })
+                    if ($_.DeviceInfo.Label -match '(\d+)$') { [int]$Matches[1] } else { [int]::MaxValue }
+                } 
+            })
         $availableInstances = if ($perDiskInstances.ContainsKey($vm.Name)) {
             @($perDiskInstances[$vm.Name] | Sort-Object)
         }
@@ -597,14 +598,14 @@ try {
             $controllerAddress = Get-VirtualDiskAddress -DiskDevice $disk -AllDevices $allDevices
             $performanceInstance = Resolve-VirtualDiskInstance -AvailableInstances $availableInstances `
                 -Candidates @(
-                    $controllerAddress,
-                    $diskName,
-                    [string]$disk.Key,
-                    [string]$disk.Backing.Uuid,
-                    [string]$disk.Backing.LunUuid,
-                    [string]$disk.Backing.DeviceName,
-                    [string]$disk.Backing.FileName
-                ) -VirtualDiskCount $virtualDisks.Count
+                $controllerAddress,
+                $diskName,
+                [string]$disk.Key,
+                [string]$disk.Backing.Uuid,
+                [string]$disk.Backing.LunUuid,
+                [string]$disk.Backing.DeviceName,
+                [string]$disk.Backing.FileName
+            ) -VirtualDiskCount $virtualDisks.Count
 
             $capacityBytes = if ($disk.CapacityInBytes -gt 0) {
                 [double]$disk.CapacityInBytes
@@ -658,16 +659,16 @@ try {
     }
 
     $diskColumnMap = [ordered]@{
-        'size (In GB)'                            = 'CapacityGB'
-        'read throughput average (MB per second)' = 'ReadThroughput_MBps_Avg'
-        'read throughput maximum (MB per second)' = 'ReadThroughput_MBps_Max'
-        'write throughput average (MB per second)' = 'WriteThroughput_MBps_Avg'
-        'write throughput maximum (MB per second)' = 'WriteThroughput_MBps_Max'
-        'read ops average (operations per second)' = 'ReadIOPS_Avg'
-        'read ops maximum (operations per second)' = 'ReadIOPS_Max'
+        'size (In GB)'                              = 'CapacityGB'
+        'read throughput average (MB per second)'   = 'ReadThroughput_MBps_Avg'
+        'read throughput maximum (MB per second)'   = 'ReadThroughput_MBps_Max'
+        'write throughput average (MB per second)'  = 'WriteThroughput_MBps_Avg'
+        'write throughput maximum (MB per second)'  = 'WriteThroughput_MBps_Max'
+        'read ops average (operations per second)'  = 'ReadIOPS_Avg'
+        'read ops maximum (operations per second)'  = 'ReadIOPS_Max'
         'write ops average (operations per second)' = 'WriteIOPS_Avg'
         'write ops maximum (operations per second)' = 'WriteIOPS_Max'
-        'data status'                              = 'DataStatus'
+        'data status'                               = 'DataStatus'
     }
     $maxDiskNumber = [int](($diskSummaryRows | Measure-Object -Property DiskNumber -Maximum).Maximum)
 
