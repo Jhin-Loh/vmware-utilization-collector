@@ -39,7 +39,7 @@ param(
     [Parameter(HelpMessage = "Collect retained real-time samples instead of historical rollups. Standalone ESXi always uses real-time mode.")]
     [switch]$Realtime,
 
-    [Parameter(HelpMessage = "Maximum recent real-time window to retrieve in real-time mode.")]
+    [Parameter(HelpMessage = "Retained real-time samples from the last X minutes.")]
     [ValidateRange(1, 60)]
     [int]$RealtimeMinutes = 60,
 
@@ -99,11 +99,11 @@ function Get-StatIntervalPlan {
         if ($segmentStart -lt $cursor) {
             $plan.Add([PSCustomObject]@{
                     Mode                  = 'Historical'
-                    IntervalMins = [int]($iv.SamplingPeriod / 60)
+                    IntervalMins          = [int]($iv.SamplingPeriod / 60)
                     SampleIntervalSeconds = [int]$iv.SamplingPeriod
-                    Level        = $iv.Level
-                    Start        = $segmentStart
-                    Finish       = $cursor
+                    Level                 = $iv.Level
+                    Start                 = $segmentStart
+                    Finish                = $cursor
                 })
             $cursor = $segmentStart
         }
@@ -318,17 +318,17 @@ try {
             try {
                 if ($segment.Mode -eq 'Realtime') {
                     $statResults = @(Get-Stat -Entity $batch -Stat $AggregateStatIds -Realtime -MaxSamples $segment.MaxSamples `
-                        -Instance '' -Server $viConnection -ErrorAction Stop
+                            -Instance '' -Server $viConnection -ErrorAction Stop
                     )
                     $diskStatResults = @(Get-Stat -Entity $batch -Stat $DiskIopsStatIds -Realtime -MaxSamples $segment.MaxSamples `
-                        -Server $viConnection -ErrorAction Stop)
+                            -Server $viConnection -ErrorAction Stop)
                 }
                 else {
                     $statResults = @(Get-Stat -Entity $batch -Stat $AggregateStatIds -Start $segment.Start -Finish $segment.Finish `
-                        -IntervalMins $segment.IntervalMins -Instance '' -Server $viConnection -ErrorAction Stop
+                            -IntervalMins $segment.IntervalMins -Instance '' -Server $viConnection -ErrorAction Stop
                     )
                     $diskStatResults = @(Get-Stat -Entity $batch -Stat $DiskIopsStatIds -Start $segment.Start -Finish $segment.Finish `
-                        -IntervalMins $segment.IntervalMins -Server $viConnection -ErrorAction Stop)
+                            -IntervalMins $segment.IntervalMins -Server $viConnection -ErrorAction Stop)
                 }
             }
             catch {
