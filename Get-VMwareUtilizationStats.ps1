@@ -152,6 +152,8 @@ $StatDefinitions = @(
     [PSCustomObject]@{ Code = 'NetReceive_KBps'; MetricId = 'net.received.average'; RollupType = 'average'; Factor = 1; DisplayUnit = 'KBps' }
 )
 $StatIds = $StatDefinitions.MetricId
+$DiskIopsStatIds = @('disk.numberread.summation', 'disk.numberwrite.summation')
+$AggregateStatIds = @($StatIds | Where-Object { $_ -notin $DiskIopsStatIds })
 $StatDefLookup = @{}
 foreach ($d in $StatDefinitions) { $StatDefLookup[$d.MetricId] = $d }
 
@@ -315,12 +317,18 @@ try {
 
             try {
                 if ($segment.Mode -eq 'Realtime') {
-                    $statResults = Get-Stat -Entity $batch -Stat $StatIds -Realtime -MaxSamples $segment.MaxSamples `
+                    $statResults = @(Get-Stat -Entity $batch -Stat $AggregateStatIds -Realtime -MaxSamples $segment.MaxSamples `
                         -Instance '' -Server $viConnection -ErrorAction Stop
+                    )
+                    $diskStatResults = @(Get-Stat -Entity $batch -Stat $DiskIopsStatIds -Realtime -MaxSamples $segment.MaxSamples `
+                        -Server $viConnection -ErrorAction Stop)
                 }
                 else {
-                    $statResults = Get-Stat -Entity $batch -Stat $StatIds -Start $segment.Start -Finish $segment.Finish `
+                    $statResults = @(Get-Stat -Entity $batch -Stat $AggregateStatIds -Start $segment.Start -Finish $segment.Finish `
                         -IntervalMins $segment.IntervalMins -Instance '' -Server $viConnection -ErrorAction Stop
+                    )
+                    $diskStatResults = @(Get-Stat -Entity $batch -Stat $DiskIopsStatIds -Start $segment.Start -Finish $segment.Finish `
+                        -IntervalMins $segment.IntervalMins -Server $viConnection -ErrorAction Stop)
                 }
             }
             catch {
@@ -328,6 +336,25 @@ try {
                 $batchErrorCount++
                 continue
             }
+
+            # Disk counters are often exposed only per virtual disk. Prefer VMware's aggregate
+            # instance when present; otherwise sum all disk instances for each sample timestamp.
+            $aggregatedDiskStats = foreach ($group in ($diskStatResults | Group-Object -Property Entity, MetricId, Timestamp)) {
+                $aggregateSamples = @($group.Group | Where-Object { [string]::IsNullOrEmpty($_.Instance) })
+                $samplesToSum = if ($aggregateSamples.Count -gt 0) { $aggregateSamples } else { @($group.Group) }
+                $firstSample = $samplesToSum[0]
+
+                [PSCustomObject]@{
+                    Entity       = $firstSample.Entity
+                    Timestamp    = $firstSample.Timestamp
+                    MetricId     = $firstSample.MetricId
+                    Value        = [double](($samplesToSum | Measure-Object -Property Value -Sum).Sum)
+                    Unit         = $firstSample.Unit
+                    Instance     = ''
+                    IntervalSecs = $firstSample.IntervalSecs
+                }
+            }
+            $statResults = @($statResults) + @($aggregatedDiskStats)
 
             if (-not $statResults) { continue }
 

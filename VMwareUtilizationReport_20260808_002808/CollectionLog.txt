@@ -1,6 +1,6 @@
 ﻿**********************
 Windows PowerShell transcript start
-Start time: 20260807131322
+Start time: 20260808002808
 Username: COLIN\Colin
 RunAs User: COLIN\Colin
 Configuration Name: 
@@ -10,8 +10,8 @@ Copyright (c) Microsoft Corporation.
 
 https://aka.ms/vscode-powershell
 Type 'help' to get help.
-" -LogLevel 'Warning' -LogPath 'c:\Users\Colin\AppData\Roaming\Code\logs\20260807T125241\window1\exthost\ms-vscode.powershell' -SessionDetailsPath 'c:\Users\Colin\AppData\Roaming\Code\User\globalStorage\ms-vscode.powershell\sessions\PSES-VSCode-10588-115944.json' -FeatureFlags @() 
-Process ID: 19728
+" -LogLevel 'Warning' -LogPath 'c:\Users\Colin\AppData\Roaming\Code\logs\20260808T001310\window1\exthost\ms-vscode.powershell' -SessionDetailsPath 'c:\Users\Colin\AppData\Roaming\Code\User\globalStorage\ms-vscode.powershell\sessions\PSES-VSCode-18364-723983.json' -FeatureFlags @() 
+Process ID: 19984
 PSVersion: 5.1.26100.8972
 PSEdition: Desktop
 PSCompatibleVersions: 1.0, 2.0, 3.0, 4.0, 5.0, 5.1.26100.8972
@@ -23,8 +23,8 @@ SerializationVersion: 1.1.0.1
 **********************
 === VMware utilization collection ===
 vCenter        : 192.168.149.128
-Requested window: 07/24/2026 13:13:22  ->  08/07/2026 13:13:22
-Output folder  : E:\Projects\AusPost\vmware-utilization-collector\VMwareUtilizationReport_20260807_131322
+Requested window: 07/25/2026 00:28:08  ->  08/08/2026 00:28:08
+Output folder  : E:\Projects\AusPost\vmware-utilization-collector\VMwareUtilizationReport_20260808_002808
 
 Connecting to 192.168.149.128 ...
 Connected as root to standalone ESXi host (read-only session).
@@ -32,20 +32,20 @@ Target VM scope: 1 VM(s).
 WARNING: Connected directly to ESXi. The requested -Days/-StartDate range is unavailable; collecting up to the latest 60 minute(s) of real-time samples instead.
 
 Collection plan:
-  Real-time samples (up to 60 minutes)
+  20-second real-time samples (up to 60 minutes)
 
 
 === Collection complete ===
 VMs processed        : 1
-Summary CSV          : E:\Projects\AusPost\vmware-utilization-collector\VMwareUtilizationReport_20260807_131322\UtilizationSummary.csv
+Summary CSV          : E:\Projects\AusPost\vmware-utilization-collector\VMwareUtilizationReport_20260808_002808\UtilizationSummary.csv
 
 Top 10 VMs by average CPU utilization:
 
 VMName         CPU_Pct_Avg Mem_Pct_Avg DiskTotalIOPS_Avg NetThroughput_KBps_Avg
 ------         ----------- ----------- ----------------- ----------------------
-WIN-DEMO-APP01        0.35         1.3                                        0
+WIN-DEMO-APP01        9.92       53.06            101.35                 273.55
 Disconnected from 192.168.149.128.
 **********************
 Windows PowerShell transcript end
-End time: 20260807131327
+End time: 20260808002815
 **********************
