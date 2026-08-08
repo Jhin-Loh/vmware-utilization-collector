@@ -112,20 +112,6 @@ function Get-StatIntervalPlan {
     return @($plan | Sort-Object Start)
 }
 
-function Get-Percentile {
-    [CmdletBinding()]
-    param(
-        $Values,
-        [double]$Percentile = 95
-    )
-    if (-not $Values -or $Values.Count -eq 0) { return $null }
-    $sorted = @($Values | Sort-Object)
-    $index = [int][math]::Ceiling(($Percentile / 100) * $sorted.Count) - 1
-    if ($index -lt 0) { $index = 0 }
-    if ($index -ge $sorted.Count) { $index = $sorted.Count - 1 }
-    return $sorted[$index]
-}
-
 function Split-IntoBatches {
     [CmdletBinding()]
     param(
@@ -138,26 +124,165 @@ function Split-IntoBatches {
     }
 }
 
+function Get-VirtualDiskAddress {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] $DiskDevice,
+        [Parameter(Mandatory)] [array]$AllDevices
+    )
+
+    $controller = $AllDevices | Where-Object { $_.Key -eq $DiskDevice.ControllerKey } | Select-Object -First 1
+    if (-not $controller -or $null -eq $DiskDevice.UnitNumber) { return $null }
+
+    $controllerDescription = "$($controller.GetType().Name) $($controller.DeviceInfo.Label)"
+    $prefix = switch -Regex ($controllerDescription) {
+        'SCSI' { 'scsi'; break }
+        'SATA|AHCI' { 'sata'; break }
+        'NVME' { 'nvme'; break }
+        'IDE' { 'ide'; break }
+        default { $null }
+    }
+    if (-not $prefix) { return $null }
+
+    return "$prefix$($controller.BusNumber):$($DiskDevice.UnitNumber)"
+}
+
+function Resolve-VirtualDiskInstance {
+    [CmdletBinding()]
+    param(
+        [string[]]$AvailableInstances,
+        [string[]]$Candidates,
+        [int]$VirtualDiskCount
+    )
+
+    foreach ($candidate in ($Candidates | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
+        $match = $AvailableInstances | Where-Object { $_ -eq $candidate } | Select-Object -First 1
+        if ($match) { return $match }
+
+        $normalizedCandidate = $candidate -replace '[^a-zA-Z0-9]', ''
+        if ($normalizedCandidate.Length -lt 8) { continue }
+        $match = $AvailableInstances | Where-Object {
+            $normalizedInstance = $_ -replace '[^a-zA-Z0-9]', ''
+            $normalizedInstance -eq $normalizedCandidate
+        } | Select-Object -First 1
+        if ($match) { return $match }
+    }
+
+    # A single disk and a single performance instance are unambiguous even when
+    # the ESXi version uses an opaque instance identifier.
+    if ($VirtualDiskCount -eq 1 -and $AvailableInstances.Count -eq 1) {
+        return $AvailableInstances[0]
+    }
+    return $null
+}
+
+function ConvertFrom-VMwareGuestDetailedData {
+    [CmdletBinding()]
+    param([string]$DetailedData)
+
+    $result = @{}
+    if ([string]::IsNullOrWhiteSpace($DetailedData)) { return $result }
+
+    foreach ($match in [regex]::Matches($DetailedData, "(?<key>[A-Za-z][A-Za-z0-9_]*)='(?<value>[^']*)'")) {
+        $result[$match.Groups['key'].Value] = $match.Groups['value'].Value
+    }
+    return $result
+}
+
+function Get-VMInventoryData {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] $VM)
+
+    $config = $VM.ExtensionData.Config
+    $guest = $VM.ExtensionData.Guest
+    $guestDetails = ConvertFrom-VMwareGuestDetailedData -DetailedData ([string]$guest.GuestDetailedData)
+
+    $osName = @(
+        $guestDetails['prettyName']
+        $guest.GuestFullName
+        $config.GuestFullName
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 1
+
+    $osVersion = $guestDetails['distroVersion']
+    if ([string]::IsNullOrWhiteSpace($osVersion) -and $osName -match '(?i)Windows Server\s+(\d{4}(?:\s+R2)?)') {
+        $osVersion = $Matches[1]
+    }
+    elseif ([string]::IsNullOrWhiteSpace($osVersion) -and $osName -match '(?i)Windows\s+(\d+(?:\.\d+)*)') {
+        $osVersion = $Matches[1]
+    }
+
+    $osArchitecture = $null
+    if ($guestDetails['bitness'] -match '^(32|64)$') {
+        $osArchitecture = "$($guestDetails['bitness'])-bit"
+    }
+    elseif ($osName -match '(?i)\((32|64)-bit\)') {
+        $osArchitecture = "$($Matches[1])-bit"
+    }
+    elseif ([string]$config.GuestId -match '(?i)64Guest$') {
+        $osArchitecture = '64-bit'
+    }
+
+    $ipAddresses = [System.Collections.Generic.List[string]]::new()
+    foreach ($address in @($VM.Guest.IPAddress)) {
+        if ([string]::IsNullOrWhiteSpace($address)) { continue }
+        $parsedAddress = $null
+        if (-not [System.Net.IPAddress]::TryParse($address, [ref]$parsedAddress)) { continue }
+        if ([System.Net.IPAddress]::IsLoopback($parsedAddress)) { continue }
+        if ($address -like '169.254.*' -or $address -like 'fe80:*') { continue }
+        if (-not $ipAddresses.Contains($address)) { $ipAddresses.Add($address) }
+    }
+    if ($ipAddresses.Count -eq 0 -and -not [string]::IsNullOrWhiteSpace($guest.IpAddress)) {
+        $ipAddresses.Add([string]$guest.IpAddress)
+    }
+
+    $firmware = switch ([string]$config.Firmware) {
+        'efi' { 'UEFI' }
+        'bios' { 'BIOS' }
+        default { $null }
+    }
+
+    $guestDisks = @($guest.Disk | Where-Object { $_.Capacity -gt 0 })
+    if ($guestDisks.Count -gt 0) {
+        $usedBytes = ($guestDisks | ForEach-Object { [double]$_.Capacity - [double]$_.FreeSpace } | Measure-Object -Sum).Sum
+        $storageInUseGB = [math]::Round($usedBytes / 1GB, 2)
+    }
+    elseif ($null -ne $VM.UsedSpaceGB) {
+        $storageInUseGB = [math]::Round([double]$VM.UsedSpaceGB, 2)
+    }
+    else {
+        $storageInUseGB = $null
+    }
+
+    [PSCustomObject]@{
+        IPAddresses    = $ipAddresses -join '; '
+        OSName         = [string]$osName
+        OSVersion      = [string]$osVersion
+        OSArchitecture = $osArchitecture
+        BootType       = $firmware
+        NetworkAdapters = [int]$VM.ExtensionData.Summary.Config.NumEthernetCards
+        NumberOfDisks   = [int]$VM.ExtensionData.Summary.Config.NumVirtualDisks
+        StorageInUseGB  = $storageInUseGB
+    }
+}
+
 $StatDefinitions = @(
-    [PSCustomObject]@{ Code = 'CPU_Pct'; MetricId = 'cpu.usage.average'; RollupType = 'average'; Factor = 1; DisplayUnit = '%' }
-    [PSCustomObject]@{ Code = 'CPU_MHz'; MetricId = 'cpu.usagemhz.average'; RollupType = 'average'; Factor = 1; DisplayUnit = 'MHz' }
-    [PSCustomObject]@{ Code = 'Mem_Pct'; MetricId = 'mem.usage.average'; RollupType = 'average'; Factor = 1; DisplayUnit = '%' }
-    [PSCustomObject]@{ Code = 'MemConsumed_GB'; MetricId = 'mem.consumed.average'; RollupType = 'average'; Factor = (1 / 1MB); DisplayUnit = 'GB' }
-    [PSCustomObject]@{ Code = 'MemActive_GB'; MetricId = 'mem.active.average'; RollupType = 'average'; Factor = (1 / 1MB); DisplayUnit = 'GB' }
-    [PSCustomObject]@{ Code = 'DiskReadIOPS'; MetricId = 'disk.numberread.summation'; RollupType = 'summation'; Factor = 1; DisplayUnit = 'IOPS' }
-    [PSCustomObject]@{ Code = 'DiskWriteIOPS'; MetricId = 'disk.numberwrite.summation'; RollupType = 'summation'; Factor = 1; DisplayUnit = 'IOPS' }
-    [PSCustomObject]@{ Code = 'DiskThroughput_KBps'; MetricId = 'disk.usage.average'; RollupType = 'average'; Factor = 1; DisplayUnit = 'KBps' }
-    [PSCustomObject]@{ Code = 'NetThroughput_KBps'; MetricId = 'net.usage.average'; RollupType = 'average'; Factor = 1; DisplayUnit = 'KBps' }
-    [PSCustomObject]@{ Code = 'NetTransmit_KBps'; MetricId = 'net.transmitted.average'; RollupType = 'average'; Factor = 1; DisplayUnit = 'KBps' }
-    [PSCustomObject]@{ Code = 'NetReceive_KBps'; MetricId = 'net.received.average'; RollupType = 'average'; Factor = 1; DisplayUnit = 'KBps' }
+    [PSCustomObject]@{ MetricId = 'cpu.usage.average'; RollupType = 'average'; Factor = 1; AverageColumn = 'CPU utilization percentage average'; MaximumColumn = 'CPU utilization percentage maximum' }
+    [PSCustomObject]@{ MetricId = 'mem.usage.average'; RollupType = 'average'; Factor = 1; AverageColumn = 'Memory utilization percentage average'; MaximumColumn = 'Memory utilization percentage maximum' }
+    [PSCustomObject]@{ MetricId = 'net.received.average'; RollupType = 'average'; Factor = (1 / 1KB); AverageColumn = 'Network In throughput average (MB per second)'; MaximumColumn = 'Network In throughput maximum (MB per second)' }
+    [PSCustomObject]@{ MetricId = 'net.transmitted.average'; RollupType = 'average'; Factor = (1 / 1KB); AverageColumn = 'Network Out throughput average (MB per second)'; MaximumColumn = 'Network Out throughput maximum (MB per second)' }
+)
+$PerDiskStatDefinitions = @(
+    [PSCustomObject]@{ Code = 'ReadThroughput_MBps'; MetricId = 'virtualdisk.read.average'; Factor = (1 / 1KB) }
+    [PSCustomObject]@{ Code = 'WriteThroughput_MBps'; MetricId = 'virtualdisk.write.average'; Factor = (1 / 1KB) }
+    [PSCustomObject]@{ Code = 'ReadIOPS'; MetricId = 'virtualdisk.numberreadaveraged.average'; Factor = 1 }
+    [PSCustomObject]@{ Code = 'WriteIOPS'; MetricId = 'virtualdisk.numberwriteaveraged.average'; Factor = 1 }
 )
 $StatIds = $StatDefinitions.MetricId
-$DiskIopsStatIds = @('disk.numberread.summation', 'disk.numberwrite.summation')
-$AggregateStatIds = @($StatIds | Where-Object { $_ -notin $DiskIopsStatIds })
+$PerDiskStatIds = $PerDiskStatDefinitions.MetricId
 $StatDefLookup = @{}
 foreach ($d in $StatDefinitions) { $StatDefLookup[$d.MetricId] = $d }
-
-#endregion Metric definitions
+$PerDiskStatDefLookup = @{}
+foreach ($d in $PerDiskStatDefinitions) { $PerDiskStatDefLookup[$d.MetricId] = $d }
 
 if ($StartDate -eq [datetime]::MinValue) {
     $StartDate = $EndDate.AddDays(-$Days)
@@ -204,6 +329,7 @@ try {
 
     # Resolve target VM scope
     $vmParams = @{ Server = $viConnection }
+    # Optional ClusterName filter is only valid when connected to a vCenter Server, not a standalone ESXi host.
     if ($ClusterName) {
         if ($isStandaloneEsxi) {
             Write-Warning 'ClusterName is ignored when connected directly to a standalone ESXi host.'
@@ -215,6 +341,7 @@ try {
     if ($VMName) {
         $vmParams['Name'] = $VMName
     }
+    # Include powered-off VMs by default; filter them out later if -IncludePoweredOffVMs is not specified.
     $targetVMs = @(Get-VM @vmParams -ErrorAction Stop)
     if (-not $IncludePoweredOffVMs) {
         $targetVMs = @($targetVMs | Where-Object { $_.PowerState -eq 'PoweredOn' })
@@ -224,7 +351,7 @@ try {
     }
     Write-Host "Target VM scope: $($targetVMs.Count) VM(s)."
 
-    # Build a VMHost -> Cluster lookup once, to avoid a per-VM Get-Cluster call
+    # Build a VMHost Cluster lookup table
     $clusterMap = @{}
     if (-not $isStandaloneEsxi) {
         try {
@@ -241,6 +368,7 @@ try {
 
     # vCenter stores historical rollups. A standalone ESXi host exposes only its short real-time window.
     $perfManager = Get-View -Server $viConnection -Id $serviceInstance.Content.PerfManager
+    # Choosing real-time mode overrides -Days/-StartDate/-EndDate, and is the only option for standalone ESXi.
     if ($isStandaloneEsxi -or $Realtime) {
         $realtimeSampleSeconds = 20
         try {
@@ -252,7 +380,7 @@ try {
         catch {
             Write-Warning "Could not query the real-time refresh rate; assuming 20 seconds for IOPS conversion. $($_.Exception.Message)"
         }
-
+    # Calculates how many samples are needed to cover the requested number of minutes.
         $realtimeMaxSamples = [int][math]::Ceiling(($RealtimeMinutes * 60) / $realtimeSampleSeconds)
         $intervalPlan = @([PSCustomObject]@{
                 Mode                  = 'Realtime'
@@ -294,10 +422,12 @@ try {
     }
     Write-Host ""
 
-    # Real-time samples are short-retention data (normally 20-second granularity). Historical
-    # mode uses vCenter's retained rollup intervals for multi-day or multi-week windows.
+    # Real-time samples are short-retention data (normally 20-second).
 
     $summaryAccumulator = @{}
+    $perDiskAccumulator = @{}
+    $perDiskInstances = @{}
+    $perDiskCollectionErrorCount = 0
     $vmsWithData = [System.Collections.Generic.HashSet[string]]::new()
     $rawExportPath = Join-Path $OutputFolder 'RawSamples.csv'
 
@@ -317,18 +447,14 @@ try {
 
             try {
                 if ($segment.Mode -eq 'Realtime') {
-                    $statResults = @(Get-Stat -Entity $batch -Stat $AggregateStatIds -Realtime -MaxSamples $segment.MaxSamples `
-                            -Instance '' -Server $viConnection -ErrorAction Stop
+                    $statResults = @(Get-Stat -Entity $batch -Stat $StatIds -Realtime -MaxSamples $segment.MaxSamples `
+                        -Instance '' -Server $viConnection -ErrorAction Stop
                     )
-                    $diskStatResults = @(Get-Stat -Entity $batch -Stat $DiskIopsStatIds -Realtime -MaxSamples $segment.MaxSamples `
-                            -Server $viConnection -ErrorAction Stop)
                 }
                 else {
-                    $statResults = @(Get-Stat -Entity $batch -Stat $AggregateStatIds -Start $segment.Start -Finish $segment.Finish `
-                            -IntervalMins $segment.IntervalMins -Instance '' -Server $viConnection -ErrorAction Stop
+                    $statResults = @(Get-Stat -Entity $batch -Stat $StatIds -Start $segment.Start -Finish $segment.Finish `
+                        -IntervalMins $segment.IntervalMins -Instance '' -Server $viConnection -ErrorAction Stop
                     )
-                    $diskStatResults = @(Get-Stat -Entity $batch -Stat $DiskIopsStatIds -Start $segment.Start -Finish $segment.Finish `
-                            -IntervalMins $segment.IntervalMins -Server $viConnection -ErrorAction Stop)
                 }
             }
             catch {
@@ -337,29 +463,27 @@ try {
                 continue
             }
 
-            # Disk counters are often exposed only per virtual disk. Prefer VMware's aggregate
-            # instance when present; otherwise sum all disk instances for each sample timestamp.
-            $aggregatedDiskStats = foreach ($group in ($diskStatResults | Group-Object -Property Entity, MetricId, Timestamp)) {
-                $aggregateSamples = @($group.Group | Where-Object { [string]::IsNullOrEmpty($_.Instance) })
-                $samplesToSum = if ($aggregateSamples.Count -gt 0) { $aggregateSamples } else { @($group.Group) }
-                $firstSample = $samplesToSum[0]
-
-                [PSCustomObject]@{
-                    Entity       = $firstSample.Entity
-                    Timestamp    = $firstSample.Timestamp
-                    MetricId     = $firstSample.MetricId
-                    Value        = [double](($samplesToSum | Measure-Object -Property Value -Sum).Sum)
-                    Unit         = $firstSample.Unit
-                    Instance     = ''
-                    IntervalSecs = $firstSample.IntervalSecs
+            $perDiskStatResults = @()
+            try {
+                if ($segment.Mode -eq 'Realtime') {
+                    $perDiskStatResults = @(Get-Stat -Entity $batch -Stat $PerDiskStatIds -Realtime -MaxSamples $segment.MaxSamples `
+                        -Server $viConnection -ErrorAction Stop)
+                }
+                else {
+                    $perDiskStatResults = @(Get-Stat -Entity $batch -Stat $PerDiskStatIds -Start $segment.Start -Finish $segment.Finish `
+                        -IntervalMins $segment.IntervalMins -Server $viConnection -ErrorAction Stop)
                 }
             }
-            $statResults = @($statResults) + @($aggregatedDiskStats)
+            catch {
+                Write-Warning "Per-disk statistics failed for batch ${batchIndex}: $($_.Exception.Message)"
+                $perDiskCollectionErrorCount++
+            }
 
-            if (-not $statResults) { continue }
+            if (-not $statResults -and -not $perDiskStatResults) { continue }
 
             if ($IncludeRawSamples) {
-                $statResults | Select-Object Entity, Timestamp, MetricId, Value, Unit, Instance |
+                @($statResults) + @($perDiskStatResults) |
+                Select-Object Entity, Timestamp, MetricId, Value, Unit, Instance |
                 Export-Csv -Path $rawExportPath -Append -NoTypeInformation
             }
 
@@ -380,20 +504,54 @@ try {
                 $summaryAccumulator[$key].Add($value)
                 [void]$vmsWithData.Add($stat.Entity)
             }
+
+            foreach ($stat in $perDiskStatResults) {
+                $statDef = $PerDiskStatDefLookup[$stat.MetricId]
+                if (-not $statDef -or [string]::IsNullOrWhiteSpace($stat.Instance)) { continue }
+
+                $instance = [string]$stat.Instance
+                $key = "$($stat.Entity)|$($stat.MetricId)|$instance"
+                if (-not $perDiskAccumulator.ContainsKey($key)) {
+                    $perDiskAccumulator[$key] = [System.Collections.Generic.List[double]]::new()
+                }
+                $perDiskAccumulator[$key].Add([double]$stat.Value)
+
+                if (-not $perDiskInstances.ContainsKey([string]$stat.Entity)) {
+                    $perDiskInstances[[string]$stat.Entity] = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+                }
+                [void]$perDiskInstances[[string]$stat.Entity].Add($instance)
+            }
         }
     }
     Write-Progress -Activity "Collecting VMware utilization statistics" -Completed
 
-    # Build the per-VM summary (Avg / Max / 95th percentile per metric)
+    # Build the per-VM summary (Avg / Max per metric)
     $summaryRows = foreach ($vm in $targetVMs) {
+        $inventory = Get-VMInventoryData -VM $vm
         $row = [ordered]@{
-            VMName        = $vm.Name
-            Cluster       = if ($isStandaloneEsxi) { '(standalone ESXi)' } elseif ($clusterMap.ContainsKey($vm.VMHost.Name)) { $clusterMap[$vm.VMHost.Name] } else { '(unknown)' }
-            VMHost        = $vm.VMHost.Name
-            PowerState    = $vm.PowerState.ToString()
-            NumCPU        = $vm.NumCpu
-            MemoryGB      = [math]::Round($vm.MemoryGB, 2)
-            ProvisionedGB = [math]::Round($vm.ProvisionedSpaceGB, 2)
+            'Server name'                                = $vm.Name
+            'Cluster'                                    = if ($isStandaloneEsxi) { '(standalone ESXi)' } elseif ($clusterMap.ContainsKey($vm.VMHost.Name)) { $clusterMap[$vm.VMHost.Name] } else { '(unknown)' }
+            'IP addresses'                               = $vm.VMHost.Name
+            'PowerState'                                 = $vm.PowerState.ToString()
+            'Cores'                                      = $vm.NumCpu
+            'Memory (In MB)'                             = [int]$vm.ExtensionData.Config.Hardware.MemoryMB
+            'OS name'                                    = $inventory.OSName
+            'OS version'                                 = $inventory.OSVersion
+            'OS architecture'                            = $inventory.OSArchitecture
+            'Server type'                                = 'Virtual'
+            'Hypervisor'                                 = 'VMware'
+            'CPU utilization percentage average'         = $null
+            'CPU utilization percentage maximum'         = $null
+            'Memory utilization percentage average'      = $null
+            'Memory utilization percentage maximum'      = $null
+            'Network adapters'                           = $inventory.NetworkAdapters
+            'Network In throughput average (MB per second)'  = $null
+            'Network In throughput maximum (MB per second)'  = $null
+            'Network Out throughput average (MB per second)' = $null
+            'Network Out throughput maximum (MB per second)' = $null
+            'Boot Type'                                  = $inventory.BootType
+            'Number of disks'                            = $inventory.NumberOfDisks
+            'Storage in use (In GB)'                     = $inventory.StorageInUseGB
         }
 
         foreach ($def in $StatDefinitions) {
@@ -403,39 +561,136 @@ try {
             if ($values -and $values.Count -gt 0) {
                 $avg = ([double](($values | Measure-Object -Average).Average)) * $def.Factor
                 $max = ([double](($values | Measure-Object -Maximum).Maximum)) * $def.Factor
-                $p95 = ([double](Get-Percentile -Values $values -Percentile 95)) * $def.Factor
 
-                $row["$($def.Code)_Avg"] = [math]::Round($avg, 2)
-                $row["$($def.Code)_Max"] = [math]::Round($max, 2)
-                $row["$($def.Code)_P95"] = [math]::Round($p95, 2)
-
-                if ($def.MetricId -eq 'cpu.usage.average') {
-                    $row['SampleCount'] = $values.Count
-                }
+                $row[$def.AverageColumn] = [math]::Round($avg, 2)
+                $row[$def.MaximumColumn] = [math]::Round($max, 2)
             }
             else {
-                $row["$($def.Code)_Avg"] = $null
-                $row["$($def.Code)_Max"] = $null
-                $row["$($def.Code)_P95"] = $null
+                $row[$def.AverageColumn] = $null
+                $row[$def.MaximumColumn] = $null
             }
-        }
-
-        if ($null -ne $row['DiskReadIOPS_Avg'] -and $null -ne $row['DiskWriteIOPS_Avg']) {
-            $row['DiskTotalIOPS_Avg'] = [math]::Round($row['DiskReadIOPS_Avg'] + $row['DiskWriteIOPS_Avg'], 2)
-        }
-        else {
-            $row['DiskTotalIOPS_Avg'] = $null
         }
 
         [PSCustomObject]$row
     }
 
     $summaryPath = Join-Path $OutputFolder 'UtilizationSummary.csv'
+
+    # Collect the inventory and statistics that will become Disk 1, Disk 2, etc.
+    $diskSummaryRows = foreach ($vm in $targetVMs) {
+        $allDevices = @($vm.ExtensionData.Config.Hardware.Device)
+        $virtualDisks = @($allDevices | Where-Object {
+                $_.DeviceInfo.Label -like 'Hard disk *' -and $null -ne $_.CapacityInKB
+            } | Sort-Object @{ Expression = {
+                        if ($_.DeviceInfo.Label -match '(\d+)$') { [int]$Matches[1] } else { [int]::MaxValue }
+                    } })
+        $availableInstances = if ($perDiskInstances.ContainsKey($vm.Name)) {
+            @($perDiskInstances[$vm.Name] | Sort-Object)
+        }
+        else {
+            @()
+        }
+
+        foreach ($disk in $virtualDisks) {
+            $diskName = [string]$disk.DeviceInfo.Label
+            $diskNumber = if ($diskName -match '(\d+)$') { [int]$Matches[1] } else { $null }
+            $controllerAddress = Get-VirtualDiskAddress -DiskDevice $disk -AllDevices $allDevices
+            $performanceInstance = Resolve-VirtualDiskInstance -AvailableInstances $availableInstances `
+                -Candidates @(
+                    $controllerAddress,
+                    $diskName,
+                    [string]$disk.Key,
+                    [string]$disk.Backing.Uuid,
+                    [string]$disk.Backing.LunUuid,
+                    [string]$disk.Backing.DeviceName,
+                    [string]$disk.Backing.FileName
+                ) -VirtualDiskCount $virtualDisks.Count
+
+            $capacityBytes = if ($disk.CapacityInBytes -gt 0) {
+                [double]$disk.CapacityInBytes
+            }
+            else {
+                [double]$disk.CapacityInKB * 1KB
+            }
+            $row = [ordered]@{
+                VMName     = $vm.Name
+                DiskNumber = $diskNumber
+                CapacityGB = [math]::Round($capacityBytes / 1GB, 2)
+            }
+
+            $missingMetrics = [System.Collections.Generic.List[string]]::new()
+            foreach ($def in $PerDiskStatDefinitions) {
+                $values = if ($performanceInstance) {
+                    $perDiskAccumulator["$($vm.Name)|$($def.MetricId)|$performanceInstance"]
+                }
+                else {
+                    $null
+                }
+
+                if ($values -and $values.Count -gt 0) {
+                    $avg = ([double](($values | Measure-Object -Average).Average)) * $def.Factor
+                    $max = ([double](($values | Measure-Object -Maximum).Maximum)) * $def.Factor
+                    $row["$($def.Code)_Avg"] = [math]::Round($avg, 2)
+                    $row["$($def.Code)_Max"] = [math]::Round($max, 2)
+                }
+                else {
+                    $row["$($def.Code)_Avg"] = $null
+                    $row["$($def.Code)_Max"] = $null
+                    $missingMetrics.Add($def.Code)
+                }
+            }
+
+            if (-not $performanceInstance -and $availableInstances.Count -eq 0) {
+                $row['DataStatus'] = 'No per-disk samples returned; check VM power state and vCenter statistics level.'
+            }
+            elseif (-not $performanceInstance) {
+                $row['DataStatus'] = "Could not map performance instances: $($availableInstances -join ', ')"
+            }
+            elseif ($missingMetrics.Count -gt 0) {
+                $row['DataStatus'] = "Missing counters: $($missingMetrics -join ', ')"
+            }
+            else {
+                $row['DataStatus'] = 'OK'
+            }
+
+            [PSCustomObject]$row
+        }
+    }
+
+    $diskColumnMap = [ordered]@{
+        'size (In GB)'                            = 'CapacityGB'
+        'read throughput average (MB per second)' = 'ReadThroughput_MBps_Avg'
+        'read throughput maximum (MB per second)' = 'ReadThroughput_MBps_Max'
+        'write throughput average (MB per second)' = 'WriteThroughput_MBps_Avg'
+        'write throughput maximum (MB per second)' = 'WriteThroughput_MBps_Max'
+        'read ops average (operations per second)' = 'ReadIOPS_Avg'
+        'read ops maximum (operations per second)' = 'ReadIOPS_Max'
+        'write ops average (operations per second)' = 'WriteIOPS_Avg'
+        'write ops maximum (operations per second)' = 'WriteIOPS_Max'
+        'data status'                              = 'DataStatus'
+    }
+    $maxDiskNumber = [int](($diskSummaryRows | Measure-Object -Property DiskNumber -Maximum).Maximum)
+
+    foreach ($summaryRow in @($summaryRows)) {
+        for ($diskNumber = 1; $diskNumber -le $maxDiskNumber; $diskNumber++) {
+            $diskRow = $diskSummaryRows | Where-Object {
+                $_.VMName -eq $summaryRow.'Server name' -and $_.DiskNumber -eq $diskNumber
+            } | Select-Object -First 1
+
+            foreach ($column in $diskColumnMap.GetEnumerator()) {
+                $columnName = "Disk $diskNumber $($column.Key)"
+                $columnValue = if ($diskRow) { $diskRow.($column.Value) } else { $null }
+                $summaryRow | Add-Member -NotePropertyName $columnName -NotePropertyValue $columnValue -Force
+            }
+        }
+    }
+
     $summaryRows | Export-Csv -Path $summaryPath -NoTypeInformation
 
     Write-Host ""
     Write-Host "=== Collection complete ===" -ForegroundColor Cyan
     Write-Host "VMs processed        : $($targetVMs.Count)"
+    Write-Host "Virtual disks        : $(@($diskSummaryRows).Count)"
     $noDataVMs = @($targetVMs.Name | Where-Object { -not $vmsWithData.Contains($_) })
     if ($noDataVMs.Count -gt 0) {
         Write-Warning "$($noDataVMs.Count) VM(s) returned no performance data at all: $($noDataVMs -join ', ')"
@@ -443,14 +698,21 @@ try {
     if ($batchErrorCount -gt 0) {
         Write-Warning "$batchErrorCount batch request(s) failed during collection (see warnings above)."
     }
+    if ($perDiskCollectionErrorCount -gt 0) {
+        Write-Warning "$perDiskCollectionErrorCount per-disk request(s) failed; check the Disk N data status columns."
+    }
+    $disksWithoutCompleteData = @($diskSummaryRows | Where-Object { $_.DataStatus -ne 'OK' })
+    if ($disksWithoutCompleteData.Count -gt 0) {
+        Write-Warning "$($disksWithoutCompleteData.Count) virtual disk(s) have incomplete performance data; see the Disk N data status columns."
+    }
     Write-Host "Summary CSV          : $summaryPath"
     if ($IncludeRawSamples) {
         Write-Host "Raw samples CSV      : $rawExportPath"
     }
     Write-Host ""
     Write-Host "Top 10 VMs by average CPU utilization:" -ForegroundColor Cyan
-    $summaryRows | Sort-Object -Property CPU_Pct_Avg -Descending |
-    Select-Object -First 10 VMName, CPU_Pct_Avg, Mem_Pct_Avg, DiskTotalIOPS_Avg, NetThroughput_KBps_Avg |
+    $summaryRows | Sort-Object -Property 'CPU utilization percentage average' -Descending |
+    Select-Object -First 10 'Server name', 'CPU utilization percentage average', 'Memory utilization percentage average', 'Network In throughput average (MB per second)', 'Network Out throughput average (MB per second)' |
     Format-Table -AutoSize | Out-String | Write-Host
 }
 finally {

@@ -4,6 +4,8 @@ This PowerShell script collects virtual machine utilization statistics from VMwa
 
 It is intended for discovery and planning work, such as understanding how busy VMs have been before sizing or migration decisions.
 
+For a beginner-friendly explanation of ESXi, performance samples, and the real-time data limit, see [ESXi Performance Data in Simple Terms](README-ESXI-BASICS.md).
+
 ## What It Collects
 
 The script collects common VM performance metrics, including:
@@ -13,6 +15,8 @@ The script collects common VM performance metrics, including:
 - Disk reads and writes
 - Disk throughput
 - Network throughput
+
+It also creates a per-virtual-disk report containing each disk's configured size, read and write throughput, and read and write operations per second (IOPS).
 
 By default, it summarizes the results per VM. You can also choose to export the individual raw samples.
 
@@ -80,6 +84,20 @@ It does not mean "collect real-time samples from any date in the past."
 For example, you usually cannot ask VMware for real-time samples from two weeks ago. If you need two weeks of data, use historical mode instead.
 
 When connected directly to a standalone ESXi host, the script automatically uses real-time mode because standalone ESXi does not provide the same historical rollup data as vCenter.
+
+### Why Standalone ESXi Cannot Provide 14 Days
+
+In plain terms, a standalone ESXi host keeps performance data like a small, reusable notepad. It records recent activity for roughly the last hour, then overwrites the oldest entries as new ones arrive. It does not keep a long-term performance archive.
+
+vCenter acts as that archive. It regularly collects performance data from ESXi hosts, summarizes it, and stores it so the script can look back over days or weeks.
+
+This means that when the script connects directly to a standalone ESXi host:
+
+- `-Days 14` cannot return 14 days of performance data because the host did not retain it.
+- The script automatically collects the available recent real-time data instead, normally up to 60 minutes.
+- The missing historical data cannot be recovered after it has been overwritten.
+
+To collect data over 14 days, connect the script to a vCenter Server that manages the host. If vCenter is not available, run the collector regularly and keep each CSV, or send the metrics to an external monitoring system.
 
 ## Which Mode Should I Use?
 
@@ -244,6 +262,56 @@ The main files are:
 - `UtilizationSummary.csv`
 - `CollectionLog.txt`
 - `RawSamples.csv`, only when `-IncludeRawSamples` is used
+
+### Per-Disk Output
+
+Per-disk inventory and performance are included in `UtilizationSummary.csv`, so each VM and all of its disks appear on one CSV row.
+
+The script checks the largest number of disks attached to the selected VMs and creates a matching set of columns. For example, if any VM has two disks, every VM row receives `Disk 1 ...` and `Disk 2 ...` columns. A VM with only one disk has empty `Disk 2 ...` fields.
+
+The columns for each disk include average and maximum read/write throughput and operations per second. For example:
+
+- `Disk 1 size (In GB)`
+- `Disk 1 read throughput average (MB per second)`
+- `Disk 1 read throughput maximum (MB per second)`
+- `Disk 1 write throughput average (MB per second)`
+- `Disk 1 write throughput maximum (MB per second)`
+- `Disk 1 read ops average (operations per second)`
+- `Disk 1 read ops maximum (operations per second)`
+- `Disk 1 write ops average (operations per second)`
+- `Disk 1 write ops maximum (operations per second)`
+- `Disk 1 data status`
+
+The same pattern continues with `Disk 2`, `Disk 3`, and so on. Disk names, controller addresses, performance-instance identifiers, and disk sample counts are not exported.
+
+Per-disk historical counters require vCenter to retain per-device statistics. If the configured vCenter statistics level does not retain those counters, the disk inventory and sizes will still appear, but the performance fields may be empty and the disk data-status column will explain why. Standalone ESXi uses its recent real-time counters instead.
+
+### Summary Column Order
+
+The server-level columns are exported in this order:
+
+1. `Server name`
+2. `Cluster`
+3. `IP addresses`
+4. `PowerState`
+5. `Cores`
+6. `Memory (In MB)`
+7. `OS name`
+8. `OS version`
+9. `OS architecture`
+10. `Server type`
+11. `Hypervisor`
+12. CPU utilization average and maximum
+13. Memory utilization average and maximum
+14. `Network adapters`
+15. Network In throughput average and maximum
+16. Network Out throughput average and maximum
+17. `Boot Type`
+18. `Number of disks`
+19. `Storage in use (In GB)`
+20. The repeating `Disk 1`, `Disk 2`, and later disk columns
+
+Guest IP addresses, the running OS name/version, and some architecture details depend on VMware Tools reporting data from inside the VM. If VMware Tools is unavailable, the script falls back to the OS configured on the VM where possible, and unavailable optional fields remain empty.
 
 ## Common Examples
 

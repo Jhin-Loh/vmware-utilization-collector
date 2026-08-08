@@ -1,6 +1,6 @@
 ﻿**********************
 Windows PowerShell transcript start
-Start time: 20260808002808
+Start time: 20260808222004
 Username: COLIN\Colin
 RunAs User: COLIN\Colin
 Configuration Name: 
@@ -23,12 +23,12 @@ SerializationVersion: 1.1.0.1
 **********************
 === VMware utilization collection ===
 vCenter        : 192.168.149.128
-Requested window: 07/25/2026 00:28:08  ->  08/08/2026 00:28:08
-Output folder  : E:\Projects\AusPost\vmware-utilization-collector\VMwareUtilizationReport_20260808_002808
+Requested window: 07/25/2026 22:20:04  ->  08/08/2026 22:20:04
+Output folder  : E:\Projects\AusPost\vmware-utilization-collector\VMwareUtilizationReport_20260808_222004
 
 Connecting to 192.168.149.128 ...
 Connected as root to standalone ESXi host (read-only session).
-Target VM scope: 1 VM(s).
+Target VM scope: 2 VM(s).
 WARNING: Connected directly to ESXi. The requested -Days/-StartDate range is unavailable; collecting up to the latest 60 minute(s) of real-time samples instead.
 
 Collection plan:
@@ -36,16 +36,18 @@ Collection plan:
 
 
 === Collection complete ===
-VMs processed        : 1
-Summary CSV          : E:\Projects\AusPost\vmware-utilization-collector\VMwareUtilizationReport_20260808_002808\UtilizationSummary.csv
+VMs processed        : 2
+Virtual disks        : 3
+Summary CSV          : E:\Projects\AusPost\vmware-utilization-collector\VMwareUtilizationReport_20260808_222004\UtilizationSummary.csv
 
 Top 10 VMs by average CPU utilization:
 
-VMName         CPU_Pct_Avg Mem_Pct_Avg DiskTotalIOPS_Avg NetThroughput_KBps_Avg
-------         ----------- ----------- ----------------- ----------------------
-WIN-DEMO-APP01        9.92       53.06            101.35                 273.55
+Server name    CPU utilization percentage average Memory utilization percentage average Network In throughput average (MB per second) Network Out throughput average (MB per second)
+-----------    ---------------------------------- ------------------------------------- --------------------------------------------- ----------------------------------------------
+test                                          0.8                                 12.63                                             0                                              0
+WIN-DEMO-APP01                               0.54                                  9.43                                             0                                              0
 Disconnected from 192.168.149.128.
 **********************
 Windows PowerShell transcript end
-End time: 20260808002815
+End time: 20260808222009
 **********************
