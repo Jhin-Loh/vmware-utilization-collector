@@ -4,6 +4,8 @@ This PowerShell script collects virtual machine utilization statistics from VMwa
 
 It is intended for discovery and planning work, such as understanding how busy VMs have been before sizing or migration decisions.
 
+For a beginner-friendly explanation of ESXi, performance samples, and the real-time data limit, see [ESXi Performance Data in Simple Terms](README-ESXI-BASICS.md).
+
 ## What It Collects
 
 The script collects common VM performance metrics, including:
@@ -16,7 +18,7 @@ The script collects common VM performance metrics, including:
 
 It also creates a per-virtual-disk report containing each disk's configured size, read and write throughput, and read and write operations per second (IOPS).
 
-By default, it summarizes the results per VM. You can also choose to export the individual raw samples.
+It summarizes the results per VM.
 
 ## Historical vs Real-Time
 
@@ -80,6 +82,22 @@ This means "collect the most recent real-time samples from the last 30 minutes."
 It does not mean "collect real-time samples from any date in the past."
 
 For example, you usually cannot ask VMware for real-time samples from two weeks ago. If you need two weeks of data, use historical mode instead.
+
+When connected directly to a standalone ESXi host, the script automatically uses real-time mode because standalone ESXi does not provide the same historical rollup data as vCenter.
+
+### Why Standalone ESXi Cannot Provide 14 Days
+
+In plain terms, a standalone ESXi host keeps performance data like a small, reusable notepad. It records recent activity for roughly the last hour, then overwrites the oldest entries as new ones arrive. It does not keep a long-term performance archive.
+
+vCenter acts as that archive. It regularly collects performance data from ESXi hosts, summarizes it, and stores it so the script can look back over days or weeks.
+
+This means that when the script connects directly to a standalone ESXi host:
+
+- `-Days 14` cannot return 14 days of performance data because the host did not retain it.
+- The script automatically collects the available recent real-time data instead, normally up to 60 minutes.
+- The missing historical data cannot be recovered after it has been overwritten.
+
+To collect data over 14 days, connect the script to a vCenter Server that manages the host. If vCenter is not available, run the collector regularly and keep each CSV, or send the metrics to an external monitoring system.
 
 ## Which Mode Should I Use?
 
@@ -217,18 +235,6 @@ Example:
 -ClusterName "Production-Cluster"
 ```
 
-### IncludeRawSamples
-
-Exports every individual performance sample in addition to the VM summary.
-
-Example:
-
-```powershell
--IncludeRawSamples
-```
-
-This can create a much larger output file.
-
 ## Output
 
 The script writes results to an output folder.
@@ -243,7 +249,6 @@ The main files are:
 
 - `UtilizationSummary.csv`
 - `CollectionLog.txt`
-- `RawSamples.csv`, only when `-IncludeRawSamples` is used
 
 ### Per-Disk Output
 
@@ -332,15 +337,6 @@ Collect a recent real-time snapshot:
   -RealtimeMinutes 30
 ```
 
-Collect historical data and include raw samples:
-
-```powershell
-.\Get-VMwareUtilizationStats.ps1 `
-  -VCenterServer "vcenter.example.com" `
-  -Days 14 `
-  -IncludeRawSamples
-```
-
 ## Requirements
 
 You need:
@@ -360,3 +356,13 @@ If your vCenter or ESXi host uses a self-signed certificate, you may need:
 ```powershell
 -AllowSelfSignedCertificate
 ```
+
+## Plain-English Summary
+
+Use this script to collect VM utilization data from VMware.
+
+For migration or discovery work, use historical mode with `-Days`, `-StartDate`, and `-EndDate`.
+
+Use `-Realtime` only when you want a current snapshot from the recent real-time window.
+
+`BatchSize` controls how many VMs are queried at once. It does not limit how many VMs the script can collect overall.
