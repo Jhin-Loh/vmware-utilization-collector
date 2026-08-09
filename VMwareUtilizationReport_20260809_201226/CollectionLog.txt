@@ -1,6 +1,6 @@
 ﻿**********************
 Windows PowerShell transcript start
-Start time: 20260808222004
+Start time: 20260809201226
 Username: COLIN\Colin
 RunAs User: COLIN\Colin
 Configuration Name: 
@@ -10,8 +10,8 @@ Copyright (c) Microsoft Corporation.
 
 https://aka.ms/vscode-powershell
 Type 'help' to get help.
-" -LogLevel 'Warning' -LogPath 'c:\Users\Colin\AppData\Roaming\Code\logs\20260808T001310\window1\exthost\ms-vscode.powershell' -SessionDetailsPath 'c:\Users\Colin\AppData\Roaming\Code\User\globalStorage\ms-vscode.powershell\sessions\PSES-VSCode-18364-723983.json' -FeatureFlags @() 
-Process ID: 19984
+" -LogLevel 'Warning' -LogPath 'c:\Users\Colin\AppData\Roaming\Code\logs\20260809T193227\window1\exthost\ms-vscode.powershell' -SessionDetailsPath 'c:\Users\Colin\AppData\Roaming\Code\User\globalStorage\ms-vscode.powershell\sessions\PSES-VSCode-17148-252900.json' -FeatureFlags @() 
+Process ID: 20564
 PSVersion: 5.1.26100.8972
 PSEdition: Desktop
 PSCompatibleVersions: 1.0, 2.0, 3.0, 4.0, 5.0, 5.1.26100.8972
@@ -23,8 +23,8 @@ SerializationVersion: 1.1.0.1
 **********************
 === VMware utilization collection ===
 vCenter        : 192.168.149.128
-Requested window: 07/25/2026 22:20:04  ->  08/08/2026 22:20:04
-Output folder  : E:\Projects\AusPost\vmware-utilization-collector\VMwareUtilizationReport_20260808_222004
+Requested window: 07/26/2026 20:12:26  ->  08/09/2026 20:12:26
+Output folder  : E:\Projects\AusPost\vmware-utilization-collector\VMwareUtilizationReport_20260809_201226
 
 Connecting to 192.168.149.128 ...
 Connected as root to standalone ESXi host (read-only session).
@@ -38,16 +38,16 @@ Collection plan:
 === Collection complete ===
 VMs processed        : 2
 Virtual disks        : 3
-Summary CSV          : E:\Projects\AusPost\vmware-utilization-collector\VMwareUtilizationReport_20260808_222004\UtilizationSummary.csv
+Summary CSV          : E:\Projects\AusPost\vmware-utilization-collector\VMwareUtilizationReport_20260809_201226\UtilizationSummary.csv
 
 Top 10 VMs by average CPU utilization:
 
 Server name    CPU utilization percentage average Memory utilization percentage average Network In throughput average (MB per second) Network Out throughput average (MB per second)
 -----------    ---------------------------------- ------------------------------------- --------------------------------------------- ----------------------------------------------
-test                                          0.8                                 12.63                                             0                                              0
-WIN-DEMO-APP01                               0.54                                  9.43                                             0                                              0
+test                                         0.88                                 10.96                                             0                                              0
+WIN-DEMO-APP01                               0.62                                  9.42                                             0                                              0
 Disconnected from 192.168.149.128.
 **********************
 Windows PowerShell transcript end
-End time: 20260808222009
+End time: 20260809201231
 **********************

@@ -29,9 +29,6 @@ param(
     [Parameter(HelpMessage = "Folder to write the CSV report(s) and run log to.")]
     [string]$OutputFolder,
 
-    [Parameter(HelpMessage = "Also export every individual raw sample (large output) in addition to the per-VM summary.")]
-    [switch]$IncludeRawSamples,
-
     [Parameter(HelpMessage = "Number of VMs to query per Get-Stat call.")]
     [ValidateRange(1, 100)]
     [int]$BatchSize = 15,
@@ -124,6 +121,7 @@ function Split-IntoBatches {
     }
 }
 
+# Translate a virtual disk's controller and unit number into a performance instance name (scsi0:0)
 function Get-VirtualDiskAddress {
     [CmdletBinding()]
     param(
@@ -135,6 +133,7 @@ function Get-VirtualDiskAddress {
     if (-not $controller -or $null -eq $DiskDevice.UnitNumber) { return $null }
 
     $controllerDescription = "$($controller.GetType().Name) $($controller.DeviceInfo.Label)"
+    # Detects if its a SCSI, SATA, NVME, or IDE controller and returns a prefix for the performance instance name.
     $prefix = switch -Regex ($controllerDescription) {
         'SCSI' { 'scsi'; break }
         'SATA|AHCI' { 'sata'; break }
@@ -147,6 +146,9 @@ function Get-VirtualDiskAddress {
     return "$prefix$($controller.BusNumber):$($DiskDevice.UnitNumber)"
 }
 
+# VMware label the performance data with controller and unit numbers, but the instance names are not guaranteed to match the virtual disk labels. 
+# This function attempts to resolve the best match between the available performance instance names and the candidate names derived from the virtual disk configuration.
+# (scsi0:0 = ReadThroughput_MBps, scsi0:1 = WriteThroughput_MBps, etc.)
 function Resolve-VirtualDiskInstance {
     [CmdletBinding()]
     param(
@@ -155,6 +157,7 @@ function Resolve-VirtualDiskInstance {
         [int]$VirtualDiskCount
     )
 
+    # Given a list of available performance instance names and a list of candidate names (from the VM's virtual disk configuration), attempt to find the best match. 
     foreach ($candidate in ($Candidates | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
         $match = $AvailableInstances | Where-Object { $_ -eq $candidate } | Select-Object -First 1
         if ($match) { return $match }
@@ -168,14 +171,13 @@ function Resolve-VirtualDiskInstance {
         if ($match) { return $match }
     }
 
-    # A single disk and a single performance instance are unambiguous even when
-    # the ESXi version uses an opaque instance identifier.
     if ($VirtualDiskCount -eq 1 -and $AvailableInstances.Count -eq 1) {
         return $AvailableInstances[0]
     }
     return $null
 }
 
+# Read VMWare and convert them into key and value pairs.
 function ConvertFrom-VMwareGuestDetailedData {
     [CmdletBinding()]
     param([string]$DetailedData)
@@ -189,6 +191,7 @@ function ConvertFrom-VMwareGuestDetailedData {
     return $result
 }
 
+# Gather VM inventory data (OS, IPs, disks, etc.) from the VM's configuration and guest properties.
 function Get-VMInventoryData {
     [CmdletBinding()]
     param([Parameter(Mandatory)] $VM)
@@ -429,8 +432,6 @@ try {
     $perDiskInstances = @{}
     $perDiskCollectionErrorCount = 0
     $vmsWithData = [System.Collections.Generic.HashSet[string]]::new()
-    $rawExportPath = Join-Path $OutputFolder 'RawSamples.csv'
-
     $batches = @(Split-IntoBatches -InputArray $targetVMs -BatchSize $BatchSize)
     $totalSteps = $intervalPlan.Count * $batches.Count
     $step = 0
@@ -480,12 +481,6 @@ try {
             }
 
             if (-not $statResults -and -not $perDiskStatResults) { continue }
-
-            if ($IncludeRawSamples) {
-                @($statResults) + @($perDiskStatResults) |
-                Select-Object Entity, Timestamp, MetricId, Value, Unit, Instance |
-                Export-Csv -Path $rawExportPath -Append -NoTypeInformation
-            }
 
             foreach ($stat in $statResults) {
                 $statDef = $StatDefLookup[$stat.MetricId]
@@ -707,9 +702,6 @@ try {
         Write-Warning "$($disksWithoutCompleteData.Count) virtual disk(s) have incomplete performance data; see the Disk N data status columns."
     }
     Write-Host "Summary CSV          : $summaryPath"
-    if ($IncludeRawSamples) {
-        Write-Host "Raw samples CSV      : $rawExportPath"
-    }
     Write-Host ""
     Write-Host "Top 10 VMs by average CPU utilization:" -ForegroundColor Cyan
     $summaryRows | Sort-Object -Property 'CPU utilization percentage average' -Descending |

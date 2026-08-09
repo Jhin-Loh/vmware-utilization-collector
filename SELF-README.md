@@ -18,7 +18,7 @@ The script collects common VM performance metrics, including:
 
 It also creates a per-virtual-disk report containing each disk's configured size, read and write throughput, and read and write operations per second (IOPS).
 
-By default, it summarizes the results per VM. You can also choose to export the individual raw samples.
+It summarizes the results per VM.
 
 ## Historical vs Real-Time
 
@@ -235,18 +235,6 @@ Example:
 -ClusterName "Production-Cluster"
 ```
 
-### IncludeRawSamples
-
-Exports every individual performance sample in addition to the VM summary.
-
-Example:
-
-```powershell
--IncludeRawSamples
-```
-
-This can create a much larger output file.
-
 ## Output
 
 The script writes results to an output folder.
@@ -261,7 +249,6 @@ The main files are:
 
 - `UtilizationSummary.csv`
 - `CollectionLog.txt`
-- `RawSamples.csv`, only when `-IncludeRawSamples` is used
 
 ### Per-Disk Output
 
@@ -348,15 +335,6 @@ Collect a recent real-time snapshot:
   -VCenterServer "vcenter.example.com" `
   -Realtime `
   -RealtimeMinutes 30
-```
-
-Collect historical data and include raw samples:
-
-```powershell
-.\Get-VMwareUtilizationStats.ps1 `
-  -VCenterServer "vcenter.example.com" `
-  -Days 14 `
-  -IncludeRawSamples
 ```
 
 ## Requirements
