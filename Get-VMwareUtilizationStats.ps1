@@ -269,10 +269,14 @@ function Get-VMInventoryData {
 }
 
 $StatDefinitions = @(
-    [PSCustomObject]@{ MetricId = 'cpu.usage.average'; RollupType = 'average'; Factor = 1; AverageColumn = 'CPU utilization percentage average'; MaximumColumn = 'CPU utilization percentage maximum' }
-    [PSCustomObject]@{ MetricId = 'mem.usage.average'; RollupType = 'average'; Factor = 1; AverageColumn = 'Memory utilization percentage average'; MaximumColumn = 'Memory utilization percentage maximum' }
-    [PSCustomObject]@{ MetricId = 'net.received.average'; RollupType = 'average'; Factor = (1 / 1KB); AverageColumn = 'Network In throughput average (MB per second)'; MaximumColumn = 'Network In throughput maximum (MB per second)' }
-    [PSCustomObject]@{ MetricId = 'net.transmitted.average'; RollupType = 'average'; Factor = (1 / 1KB); AverageColumn = 'Network Out throughput average (MB per second)'; MaximumColumn = 'Network Out throughput maximum (MB per second)' }
+    [PSCustomObject]@{ MetricId = 'cpu.usage.average'; RollupType = 'average'; Factor = 1; PerVCpu = $false; AverageColumn = 'CPU utilization percentage average'; MaximumColumn = 'CPU utilization percentage maximum' }
+    # cpu.ready.summation returns ms of ready-time per sample; dividing by sample seconds yields ms/sec, *0.1 = % per vCPU, then PerVCpu divides by vCPU count.
+    [PSCustomObject]@{ MetricId = 'cpu.ready.summation'; RollupType = 'summation'; Factor = 0.1; PerVCpu = $true; AverageColumn = 'CPU ready percentage average'; MaximumColumn = 'CPU ready percentage maximum' }
+    [PSCustomObject]@{ MetricId = 'mem.usage.average'; RollupType = 'average'; Factor = 1; PerVCpu = $false; AverageColumn = 'Memory utilization percentage average'; MaximumColumn = 'Memory utilization percentage maximum' }
+    # mem.vmmemctl.average (balloon) is reported in KB; convert to MB.
+    [PSCustomObject]@{ MetricId = 'mem.vmmemctl.average'; RollupType = 'average'; Factor = (1 / 1KB); PerVCpu = $false; AverageColumn = 'Memory balloon average (MB)'; MaximumColumn = 'Memory balloon maximum (MB)' }
+    [PSCustomObject]@{ MetricId = 'net.received.average'; RollupType = 'average'; Factor = (1 / 1KB); PerVCpu = $false; AverageColumn = 'Network In throughput average (MB per second)'; MaximumColumn = 'Network In throughput maximum (MB per second)' }
+    [PSCustomObject]@{ MetricId = 'net.transmitted.average'; RollupType = 'average'; Factor = (1 / 1KB); PerVCpu = $false; AverageColumn = 'Network Out throughput average (MB per second)'; MaximumColumn = 'Network Out throughput maximum (MB per second)' }
 )
 $PerDiskStatDefinitions = @(
     [PSCustomObject]@{ Code = 'ReadThroughput_MBps'; MetricId = 'virtualdisk.read.average'; Factor = (1 / 1KB) }
@@ -537,8 +541,12 @@ try {
             'Hypervisor'                                     = 'Vmware'
             'CPU utilization percentage average'             = $null
             'CPU utilization percentage maximum'             = $null
+            'CPU ready percentage average'                   = $null
+            'CPU ready percentage maximum'                   = $null
             'Memory utilization percentage average'          = $null
             'Memory utilization percentage maximum'          = $null
+            'Memory balloon average (MB)'                    = $null
+            'Memory balloon maximum (MB)'                    = $null
             'Network adapters'                               = $inventory.NetworkAdapters
             'Network In throughput average (MB per second)'  = $null
             'Network In throughput maximum (MB per second)'  = $null
@@ -556,6 +564,11 @@ try {
             if ($values -and $values.Count -gt 0) {
                 $avg = ([double](($values | Measure-Object -Average).Average)) * $def.Factor
                 $max = ([double](($values | Measure-Object -Maximum).Maximum)) * $def.Factor
+
+                if ($def.PerVCpu -and $vm.NumCpu -gt 0) {
+                    $avg = $avg / $vm.NumCpu
+                    $max = $max / $vm.NumCpu
+                }
 
                 $row[$def.AverageColumn] = [math]::Round($avg, 2)
                 $row[$def.MaximumColumn] = [math]::Round($max, 2)
