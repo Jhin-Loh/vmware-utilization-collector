@@ -30,6 +30,9 @@ DECLARE @SSISCatalogPresent varchar(5) = 'FALSE',
         @SSISAgentJobStepCount int = 0,
         @SSISAgentJobList nvarchar(max) = N'',
         @SSISLastExecution datetimeoffset = NULL,
+        @SSISActivePackages90d int = 0,
+        @SSISTotalRuns90d int = 0,
+        @SSISTopPackages90d nvarchar(max) = N'',
         @SSISWarning nvarchar(4000) = N'';
 
 -- SSRS
@@ -39,6 +42,9 @@ DECLARE @SSRSReportServerPresent varchar(5) = 'FALSE',
         @SSRSSubscriptionCount int = 0,
         @SSRSSubscriptionList nvarchar(max) = N'',
         @SSRSLastSubscriptionRun datetime = NULL,
+        @SSRSActiveReports90d int = 0,
+        @SSRSTotalRuns90d int = 0,
+        @SSRSTopReports90d nvarchar(max) = N'',
         @SSRSWarning nvarchar(4000) = N'';
 
 
@@ -155,6 +161,8 @@ BEGIN
 
     BEGIN TRY
         SET @SQL = N'
+        DECLARE @Since datetimeoffset = DATEADD(day, -90, SYSDATETIMEOFFSET());
+
         SELECT @PackageCountOUT = COUNT(*)
         FROM SSISDB.catalog.packages;
 
@@ -170,14 +178,39 @@ BEGIN
 
         SELECT TOP (1) @LastExecutionOUT = start_time
         FROM SSISDB.catalog.executions
-        ORDER BY execution_id DESC;';
+        ORDER BY execution_id DESC;
+
+        SELECT @ActivePackages90dOUT = COUNT(DISTINCT e.folder_name + ''/'' + e.project_name + ''/'' + e.package_name),
+               @TotalRuns90dOUT = COUNT_BIG(e.execution_id)
+        FROM SSISDB.catalog.executions e
+        WHERE e.start_time >= @Since;
+
+        SELECT @TopPackages90dOUT = ISNULL(
+            STUFF((
+                SELECT ''; '' + t.pkg_full + '' ('' + CAST(t.run_count AS varchar(20)) + '' runs)''
+                FROM (
+                    SELECT TOP (5)
+                        QUOTENAME(folder_name) + ''/'' + QUOTENAME(project_name) + ''/'' + QUOTENAME(package_name) AS pkg_full,
+                        COUNT_BIG(*) AS run_count
+                    FROM SSISDB.catalog.executions
+                    WHERE start_time >= @Since
+                    GROUP BY folder_name, project_name, package_name
+                    ORDER BY COUNT_BIG(*) DESC
+                ) t
+                ORDER BY t.run_count DESC
+                FOR XML PATH(''''),TYPE
+            ).value(''.'',''nvarchar(max)''),1,2,''''),N'''');';
 
         EXEC sys.sp_executesql
             @SQL,
-            N'@PackageCountOUT int OUTPUT,@PackageListOUT nvarchar(max) OUTPUT,@LastExecutionOUT datetimeoffset OUTPUT',
+            N'@PackageCountOUT int OUTPUT,@PackageListOUT nvarchar(max) OUTPUT,@LastExecutionOUT datetimeoffset OUTPUT,
+              @ActivePackages90dOUT int OUTPUT,@TotalRuns90dOUT int OUTPUT,@TopPackages90dOUT nvarchar(max) OUTPUT',
             @PackageCountOUT=@SSISPackageCount OUTPUT,
             @PackageListOUT=@SSISPackageList OUTPUT,
-            @LastExecutionOUT=@SSISLastExecution OUTPUT;
+            @LastExecutionOUT=@SSISLastExecution OUTPUT,
+            @ActivePackages90dOUT=@SSISActivePackages90d OUTPUT,
+            @TotalRuns90dOUT=@SSISTotalRuns90d OUTPUT,
+            @TopPackages90dOUT=@SSISTopPackages90d OUTPUT;
     END TRY
     BEGIN CATCH
         SET @SSISWarning = ERROR_MESSAGE();
@@ -243,6 +276,8 @@ BEGIN
 
     BEGIN TRY
         SET @SQL = N'
+        DECLARE @Since datetime = DATEADD(day, -90, GETDATE());
+
         SELECT @ReportCountOUT = COUNT(*)
         FROM ReportServer.dbo.Catalog
         WHERE Type = 2;
@@ -267,18 +302,41 @@ BEGIN
                 JOIN ReportServer.dbo.Catalog c ON s.Report_OID = c.ItemID
                 ORDER BY c.Path
                 FOR XML PATH(''''),TYPE
+            ).value(''.'',''nvarchar(max)''),1,2,''''),N'''');
+
+        SELECT @ActiveReports90dOUT = COUNT(DISTINCT ItemPath),
+               @TotalRuns90dOUT = COUNT_BIG(*)
+        FROM ReportServer.dbo.ExecutionLog3
+        WHERE TimeStart >= @Since;
+
+        SELECT @TopReports90dOUT = ISNULL(
+            STUFF((
+                SELECT ''; '' + t.ItemPath + '' ('' + CAST(t.run_count AS varchar(20)) + '' runs)''
+                FROM (
+                    SELECT TOP (5) ItemPath, COUNT_BIG(*) AS run_count
+                    FROM ReportServer.dbo.ExecutionLog3
+                    WHERE TimeStart >= @Since
+                    GROUP BY ItemPath
+                    ORDER BY COUNT_BIG(*) DESC
+                ) t
+                ORDER BY t.run_count DESC
+                FOR XML PATH(''''),TYPE
             ).value(''.'',''nvarchar(max)''),1,2,''''),N'''');';
 
         EXEC sys.sp_executesql
             @SQL,
             N'@ReportCountOUT int OUTPUT,@ReportListOUT nvarchar(max) OUTPUT,
               @SubscriptionCountOUT int OUTPUT,@SubscriptionListOUT nvarchar(max) OUTPUT,
-              @LastSubscriptionOUT datetime OUTPUT',
+              @LastSubscriptionOUT datetime OUTPUT,
+              @ActiveReports90dOUT int OUTPUT,@TotalRuns90dOUT int OUTPUT,@TopReports90dOUT nvarchar(max) OUTPUT',
             @ReportCountOUT=@SSRSReportCount OUTPUT,
             @ReportListOUT=@SSRSReportList OUTPUT,
             @SubscriptionCountOUT=@SSRSSubscriptionCount OUTPUT,
             @SubscriptionListOUT=@SSRSSubscriptionList OUTPUT,
-            @LastSubscriptionOUT=@SSRSLastSubscriptionRun OUTPUT;
+            @LastSubscriptionOUT=@SSRSLastSubscriptionRun OUTPUT,
+            @ActiveReports90dOUT=@SSRSActiveReports90d OUTPUT,
+            @TotalRuns90dOUT=@SSRSTotalRuns90d OUTPUT,
+            @TopReports90dOUT=@SSRSTopReports90d OUTPUT;
     END TRY
     BEGIN CATCH
         SET @SSRSWarning = ERROR_MESSAGE();
@@ -460,6 +518,9 @@ SELECT
     @SSISAgentJobStepCount AS [SSIS SQL Agent job step count],
     @SSISAgentJobList AS [SSIS SQL Agent jobs],
     @SSISLastExecution AS [SSIS last execution],
+    @SSISActivePackages90d AS [SSIS active packages (90d)],
+    @SSISTotalRuns90d AS [SSIS executions (90d)],
+    @SSISTopPackages90d AS [SSIS top packages (90d)],
     @SSISWarning AS [SSIS discovery warning],
 
     @SSRSReportServerPresent AS [SSRS ReportServer present],
@@ -468,6 +529,9 @@ SELECT
     @SSRSSubscriptionCount AS [SSRS subscription count],
     @SSRSSubscriptionList AS [SSRS subscriptions],
     @SSRSLastSubscriptionRun AS [SSRS last subscription run],
+    @SSRSActiveReports90d AS [SSRS active reports (90d)],
+    @SSRSTotalRuns90d AS [SSRS executions (90d)],
+    @SSRSTopReports90d AS [SSRS top reports (90d)],
     @SSRSWarning AS [SSRS discovery warning]
 
 FROM DatabaseInfo db
