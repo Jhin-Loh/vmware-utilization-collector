@@ -1,0 +1,34 @@
+﻿**********************
+Windows PowerShell transcript start
+Start time: 20260817210421
+Username: COLIN\Colin
+RunAs User: COLIN\Colin
+Configuration Name: 
+Machine: COLIN (Microsoft Windows NT 10.0.26200.0)
+Host Application: C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe
+Process ID: 4080
+PSVersion: 5.1.26100.9168
+PSEdition: Desktop
+PSCompatibleVersions: 1.0, 2.0, 3.0, 4.0, 5.0, 5.1.26100.9168
+BuildVersion: 10.0.26100.9168
+CLRVersion: 4.0.30319.42000
+WSManStackVersion: 3.0
+PSRemotingProtocolVersion: 2.3
+SerializationVersion: 1.1.0.1
+**********************
+=== Windows Server inventory collection ===
+Targets       : 3
+Output folder : E:\Projects\AusPost\vmware-utilization-collector\WindowsServerInventory_20260817_210421
+Throttle limit: 8
+Timeout       : 300 seconds per server
+
+Invoking remote collection...
+
+=== Collection complete ===
+Targets total       : 3
+Targets reached     : 3
+Output folder       : E:\Projects\AusPost\vmware-utilization-collector\WindowsServerInventory_20260817_210421
+**********************
+Windows PowerShell transcript end
+End time: 20260817210424
+**********************

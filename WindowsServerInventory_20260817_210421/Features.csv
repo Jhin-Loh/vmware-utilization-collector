@@ -1,0 +1,63 @@
+﻿"Category","ServerName","Name","DisplayName","FeatureType","Path","Depth","Parent"
+"Feature","LAB-DC01","File-Services","File and iSCSI Services","Role Service","File and Storage Services\File and iSCSI Services","2","FileAndStorage-Services"
+"Feature","LAB-DC01","FS-FileServer","File Server","Role Service","File and Storage Services\File and iSCSI Services\File Server","3","File-Services"
+"Feature","LAB-DC01","Storage-Services","Storage Services","Role Service","File and Storage Services\Storage Services","2","FileAndStorage-Services"
+"Feature","LAB-DC01","NET-Framework-45-Features",".NET Framework 4.6 Features","Feature",".NET Framework 4.6 Features","1",
+"Feature","LAB-DC01","NET-Framework-45-Core",".NET Framework 4.6","Feature",".NET Framework 4.6 Features\.NET Framework 4.6","2","NET-Framework-45-Features"
+"Feature","LAB-DC01","NET-WCF-Services45","WCF Services","Feature",".NET Framework 4.6 Features\WCF Services","2","NET-Framework-45-Features"
+"Feature","LAB-DC01","NET-WCF-TCP-PortSharing45","TCP Port Sharing","Feature",".NET Framework 4.6 Features\WCF Services\TCP Port Sharing","3","NET-WCF-Services45"
+"Feature","LAB-DC01","GPMC","Group Policy Management","Feature","Group Policy Management","1",
+"Feature","LAB-DC01","RSAT","Remote Server Administration Tools","Feature","Remote Server Administration Tools","1",
+"Feature","LAB-DC01","RSAT-Role-Tools","Role Administration Tools","Feature","Remote Server Administration Tools\Role Administration Tools","2","RSAT"
+"Feature","LAB-DC01","RSAT-AD-Tools","AD DS and AD LDS Tools","Feature","Remote Server Administration Tools\Role Administration Tools\AD DS and AD LDS Tools","3","RSAT-Role-Tools"
+"Feature","LAB-DC01","RSAT-AD-PowerShell","Active Directory module for Windows PowerShell","Feature","Remote Server Administration Tools\Role Administration Tools\AD DS and AD LDS Tools\Active Directory module for Windows PowerShell","4","RSAT-AD-Tools"
+"Feature","LAB-DC01","RSAT-ADDS","AD DS Tools","Feature","Remote Server Administration Tools\Role Administration Tools\AD DS and AD LDS Tools\AD DS Tools","4","RSAT-AD-Tools"
+"Feature","LAB-DC01","RSAT-AD-AdminCenter","Active Directory Administrative Center","Feature","Remote Server Administration Tools\Role Administration Tools\AD DS and AD LDS Tools\AD DS Tools\Active Directory Administrative Center","5","RSAT-ADDS"
+"Feature","LAB-DC01","RSAT-ADDS-Tools","AD DS Snap-Ins and Command-Line Tools","Feature","Remote Server Administration Tools\Role Administration Tools\AD DS and AD LDS Tools\AD DS Tools\AD DS Snap-Ins and Command-Line Tools","5","RSAT-ADDS"
+"Feature","LAB-DC01","RSAT-DNS-Server","DNS Server Tools","Feature","Remote Server Administration Tools\Role Administration Tools\DNS Server Tools","3","RSAT-Role-Tools"
+"Feature","LAB-DC01","FS-SMB1","SMB 1.0/CIFS File Sharing Support","Feature","SMB 1.0/CIFS File Sharing Support","1",
+"Feature","LAB-DC01","Windows-Defender-Features","Windows Defender Features","Feature","Windows Defender Features","1",
+"Feature","LAB-DC01","Windows-Defender","Windows Defender","Feature","Windows Defender Features\Windows Defender","2","Windows-Defender-Features"
+"Feature","LAB-DC01","Windows-Defender-Gui","GUI for Windows Defender","Feature","Windows Defender Features\GUI for Windows Defender","2","Windows-Defender-Features"
+"Feature","LAB-DC01","PowerShellRoot","Windows PowerShell","Feature","Windows PowerShell","1",
+"Feature","LAB-DC01","PowerShell","Windows PowerShell 5.1","Feature","Windows PowerShell\Windows PowerShell 5.1","2","PowerShellRoot"
+"Feature","LAB-DC01","PowerShell-ISE","Windows PowerShell ISE","Feature","Windows PowerShell\Windows PowerShell ISE","2","PowerShellRoot"
+"Feature","LAB-DC01","WoW64-Support","WoW64 Support","Feature","WoW64 Support","1",
+"Feature","WIN-DEMO-APP03","Storage-Services","Storage Services","Role Service","File and Storage Services\Storage Services","2","FileAndStorage-Services"
+"Feature","WIN-DEMO-APP03","NET-Framework-45-Features",".NET Framework 4.6 Features","Feature",".NET Framework 4.6 Features","1",
+"Feature","WIN-DEMO-APP03","NET-Framework-45-Core",".NET Framework 4.6","Feature",".NET Framework 4.6 Features\.NET Framework 4.6","2","NET-Framework-45-Features"
+"Feature","WIN-DEMO-APP03","NET-WCF-Services45","WCF Services","Feature",".NET Framework 4.6 Features\WCF Services","2","NET-Framework-45-Features"
+"Feature","WIN-DEMO-APP03","NET-WCF-TCP-PortSharing45","TCP Port Sharing","Feature",".NET Framework 4.6 Features\WCF Services\TCP Port Sharing","3","NET-WCF-Services45"
+"Feature","WIN-DEMO-APP03","Failover-Clustering","Failover Clustering","Feature","Failover Clustering","1",
+"Feature","WIN-DEMO-APP03","RSAT","Remote Server Administration Tools","Feature","Remote Server Administration Tools","1",
+"Feature","WIN-DEMO-APP03","RSAT-Feature-Tools","Feature Administration Tools","Feature","Remote Server Administration Tools\Feature Administration Tools","2","RSAT"
+"Feature","WIN-DEMO-APP03","RSAT-Clustering","Failover Clustering Tools","Feature","Remote Server Administration Tools\Feature Administration Tools\Failover Clustering Tools","3","RSAT-Feature-Tools"
+"Feature","WIN-DEMO-APP03","RSAT-Clustering-Mgmt","Failover Cluster Management Tools","Feature","Remote Server Administration Tools\Feature Administration Tools\Failover Clustering Tools\Failover Cluster Management Tools","4","RSAT-Clustering"
+"Feature","WIN-DEMO-APP03","RSAT-Clustering-PowerShell","Failover Cluster Module for Windows PowerShell","Feature","Remote Server Administration Tools\Feature Administration Tools\Failover Clustering Tools\Failover Cluster Module for Windows PowerShell","4","RSAT-Clustering"
+"Feature","WIN-DEMO-APP03","FS-SMB1","SMB 1.0/CIFS File Sharing Support","Feature","SMB 1.0/CIFS File Sharing Support","1",
+"Feature","WIN-DEMO-APP03","Windows-Defender-Features","Windows Defender Features","Feature","Windows Defender Features","1",
+"Feature","WIN-DEMO-APP03","Windows-Defender","Windows Defender","Feature","Windows Defender Features\Windows Defender","2","Windows-Defender-Features"
+"Feature","WIN-DEMO-APP03","Windows-Defender-Gui","GUI for Windows Defender","Feature","Windows Defender Features\GUI for Windows Defender","2","Windows-Defender-Features"
+"Feature","WIN-DEMO-APP03","PowerShellRoot","Windows PowerShell","Feature","Windows PowerShell","1",
+"Feature","WIN-DEMO-APP03","PowerShell","Windows PowerShell 5.1","Feature","Windows PowerShell\Windows PowerShell 5.1","2","PowerShellRoot"
+"Feature","WIN-DEMO-APP03","PowerShell-ISE","Windows PowerShell ISE","Feature","Windows PowerShell\Windows PowerShell ISE","2","PowerShellRoot"
+"Feature","WIN-DEMO-APP03","WoW64-Support","WoW64 Support","Feature","WoW64 Support","1",
+"Feature","WIN-DEMO-APP01","Storage-Services","Storage Services","Role Service","File and Storage Services\Storage Services","2","FileAndStorage-Services"
+"Feature","WIN-DEMO-APP01","NET-Framework-45-Features",".NET Framework 4.6 Features","Feature",".NET Framework 4.6 Features","1",
+"Feature","WIN-DEMO-APP01","NET-Framework-45-Core",".NET Framework 4.6","Feature",".NET Framework 4.6 Features\.NET Framework 4.6","2","NET-Framework-45-Features"
+"Feature","WIN-DEMO-APP01","NET-WCF-Services45","WCF Services","Feature",".NET Framework 4.6 Features\WCF Services","2","NET-Framework-45-Features"
+"Feature","WIN-DEMO-APP01","NET-WCF-TCP-PortSharing45","TCP Port Sharing","Feature",".NET Framework 4.6 Features\WCF Services\TCP Port Sharing","3","NET-WCF-Services45"
+"Feature","WIN-DEMO-APP01","Failover-Clustering","Failover Clustering","Feature","Failover Clustering","1",
+"Feature","WIN-DEMO-APP01","RSAT","Remote Server Administration Tools","Feature","Remote Server Administration Tools","1",
+"Feature","WIN-DEMO-APP01","RSAT-Feature-Tools","Feature Administration Tools","Feature","Remote Server Administration Tools\Feature Administration Tools","2","RSAT"
+"Feature","WIN-DEMO-APP01","RSAT-Clustering","Failover Clustering Tools","Feature","Remote Server Administration Tools\Feature Administration Tools\Failover Clustering Tools","3","RSAT-Feature-Tools"
+"Feature","WIN-DEMO-APP01","RSAT-Clustering-Mgmt","Failover Cluster Management Tools","Feature","Remote Server Administration Tools\Feature Administration Tools\Failover Clustering Tools\Failover Cluster Management Tools","4","RSAT-Clustering"
+"Feature","WIN-DEMO-APP01","RSAT-Clustering-PowerShell","Failover Cluster Module for Windows PowerShell","Feature","Remote Server Administration Tools\Feature Administration Tools\Failover Clustering Tools\Failover Cluster Module for Windows PowerShell","4","RSAT-Clustering"
+"Feature","WIN-DEMO-APP01","FS-SMB1","SMB 1.0/CIFS File Sharing Support","Feature","SMB 1.0/CIFS File Sharing Support","1",
+"Feature","WIN-DEMO-APP01","Windows-Defender-Features","Windows Defender Features","Feature","Windows Defender Features","1",
+"Feature","WIN-DEMO-APP01","Windows-Defender","Windows Defender","Feature","Windows Defender Features\Windows Defender","2","Windows-Defender-Features"
+"Feature","WIN-DEMO-APP01","Windows-Defender-Gui","GUI for Windows Defender","Feature","Windows Defender Features\GUI for Windows Defender","2","Windows-Defender-Features"
+"Feature","WIN-DEMO-APP01","PowerShellRoot","Windows PowerShell","Feature","Windows PowerShell","1",
+"Feature","WIN-DEMO-APP01","PowerShell","Windows PowerShell 5.1","Feature","Windows PowerShell\Windows PowerShell 5.1","2","PowerShellRoot"
+"Feature","WIN-DEMO-APP01","PowerShell-ISE","Windows PowerShell ISE","Feature","Windows PowerShell\Windows PowerShell ISE","2","PowerShellRoot"
+"Feature","WIN-DEMO-APP01","WoW64-Support","WoW64 Support","Feature","WoW64 Support","1",

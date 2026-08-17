@@ -1,21 +1,3 @@
-<#
-.SYNOPSIS
-    Collects Windows Server inventory (roles, features, services, installed
-    applications, scheduled tasks, certificates) from one or more remote
-    servers, for Azure Migrate discovery.
-
-.DESCRIPTION
-    Runs read-only queries over PowerShell remoting (WinRM). Produces one CSV
-    per category with a ServerName column, plus a per-server summary CSV and
-    a transcript log. Failures on individual servers are captured in the
-    summary and do not abort the run.
-
-.EXAMPLE
-    .\Get-WindowsServerInventory.ps1 -ServerName 'srv01','srv02' -Credential (Get-Credential)
-
-.EXAMPLE
-    .\Get-WindowsServerInventory.ps1 -ServerListFile .\servers.txt
-#>
 [CmdletBinding()]
 param(
     [Parameter(ParameterSetName = 'ByName', Mandatory = $true, HelpMessage = "One or more server hostnames or FQDNs.")]
@@ -39,7 +21,7 @@ param(
     [int]$TimeoutSeconds = 300,
 
     [Parameter(HelpMessage = "Certificate stores to enumerate. Defaults to LocalMachine\\My and LocalMachine\\WebHosting (the stores where server/IIS/code-signing certs live).")]
-    [string[]]$CertificateStore = @('My', 'WebHosting')
+    [string[]]$CertificateStore = @('My', 'WebHosting', 'Root', 'CA', 'TrustedPublisher')
 )
 
 if ([string]::IsNullOrWhiteSpace($OutputFolder)) {
@@ -77,7 +59,7 @@ $RemoteInventoryScriptBlock = {
     $server = $env:COMPUTERNAME
     $results = [System.Collections.Generic.List[object]]::new()
 
-    # ----- Roles & Features (Server Manager) -----
+    # Roles & Features (Server Manager)
     try {
         Import-Module ServerManager -ErrorAction Stop
         foreach ($feature in (Get-WindowsFeature -ErrorAction Stop | Where-Object { $_.Installed })) {
@@ -102,7 +84,7 @@ $RemoteInventoryScriptBlock = {
             })
     }
 
-    # ----- Services -----
+    # Services
     try {
         foreach ($svc in (Get-CimInstance -ClassName Win32_Service -ErrorAction Stop)) {
             $results.Add([PSCustomObject]@{
@@ -127,7 +109,7 @@ $RemoteInventoryScriptBlock = {
             })
     }
 
-    # Registry uninstall keys — reliable and doesn't trigger MSI repair like Win32_Product.
+    # Installed Applications
     try {
         $uninstallKeys = @(
             'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall'
@@ -155,7 +137,6 @@ $RemoteInventoryScriptBlock = {
                         InstallLocation = $props.InstallLocation
                         UninstallString = $props.UninstallString
                         Architecture    = $architecture
-                        RegistryKey     = $entry.PSChildName
                     })
             }
         }
@@ -169,7 +150,7 @@ $RemoteInventoryScriptBlock = {
             })
     }
 
-    # ----- Scheduled tasks -----
+    # Scheduled tasks
     try {
         foreach ($task in (Get-ScheduledTask -ErrorAction Stop)) {
             $taskInfo = $null
@@ -209,7 +190,7 @@ $RemoteInventoryScriptBlock = {
             })
     }
 
-    # ----- Certificates -----
+    # Certificates
     foreach ($storeName in $CertificateStore) {
         $storePath = "Cert:\LocalMachine\$storeName"
         try {
@@ -356,7 +337,10 @@ try {
         $rows = $exports[$fileName]
         $path = Join-Path $OutputFolder $fileName
         if ($rows -and @($rows).Count -gt 0) {
-            @($rows) | Export-Csv -Path $path -NoTypeInformation -Encoding UTF8
+            # Drop the note properties WinRM adds to every remoted object.
+            @($rows) |
+                Select-Object -Property * -ExcludeProperty PSComputerName, RunspaceId, PSShowComputerName |
+                Export-Csv -Path $path -NoTypeInformation -Encoding UTF8
         }
         else {
             # Keep an empty file so downstream tooling doesn't need to special-case missing outputs.

@@ -1,0 +1,6 @@
+﻿"Category","ServerName","Name","DisplayName","FeatureType","Path","Depth","Parent"
+"Role","LAB-DC01","AD-Domain-Services","Active Directory Domain Services","Role","Active Directory Domain Services","1",
+"Role","LAB-DC01","DNS","DNS Server","Role","DNS Server","1",
+"Role","LAB-DC01","FileAndStorage-Services","File and Storage Services","Role","File and Storage Services","1",
+"Role","WIN-DEMO-APP03","FileAndStorage-Services","File and Storage Services","Role","File and Storage Services","1",
+"Role","WIN-DEMO-APP01","FileAndStorage-Services","File and Storage Services","Role","File and Storage Services","1",
