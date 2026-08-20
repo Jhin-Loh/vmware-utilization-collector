@@ -16,11 +16,22 @@ param(
     [ValidateRange(1, 64)]
     [int]$ThrottleLimit = 8,
 
-    [Parameter(HelpMessage = "Per-server remoting timeout in seconds.")]
+    [Parameter(HelpMessage = "Per-server WinRM operation timeout in seconds. Applied via New-PSSessionOption -OperationTimeout.")]
     [ValidateRange(30, 3600)]
     [int]$TimeoutSeconds = 300,
 
-    [Parameter(HelpMessage = "Certificate stores to enumerate. Defaults to LocalMachine\\My and LocalMachine\\WebHosting (the stores where server/IIS/code-signing certs live).")]
+    [Parameter(HelpMessage = "Connect over WinRM HTTPS (port 5986 by default). Required in environments that mandate WinRM over TLS.")]
+    [switch]$UseSSL,
+
+    [Parameter(HelpMessage = "Override the WinRM port. Defaults to 5985 (HTTP) or 5986 (HTTPS with -UseSSL).")]
+    [ValidateRange(1, 65535)]
+    [int]$Port,
+
+    [Parameter(HelpMessage = "WinRM authentication mechanism (e.g. Default, Kerberos, Negotiate, CredSSP, Basic).")]
+    [ValidateSet('Default', 'Basic', 'Credssp', 'Digest', 'Kerberos', 'Negotiate', 'NegotiateWithImplicitCredential')]
+    [string]$Authentication = 'Default',
+
+    [Parameter(HelpMessage = "Certificate stores to enumerate. Defaults to LocalMachine\\My, WebHosting, Root, CA and TrustedPublisher (server/IIS/code-signing certs plus trust anchors).")]
     [string[]]$CertificateStore = @('My', 'WebHosting', 'Root', 'CA', 'TrustedPublisher')
 )
 
@@ -157,7 +168,11 @@ $RemoteInventoryScriptBlock = {
             try { $taskInfo = Get-ScheduledTaskInfo -TaskName $task.TaskName -TaskPath $task.TaskPath -ErrorAction Stop } catch {}
 
             $actions = @($task.Actions | ForEach-Object {
-                    if ($_.PSObject.Properties['Execute']) { $_.Execute }
+                    $exe = if ($_.PSObject.Properties['Execute']) { $_.Execute } else { $null }
+                    $args = if ($_.PSObject.Properties['Arguments']) { $_.Arguments } else { $null }
+                    if ($exe) {
+                        if ([string]::IsNullOrWhiteSpace($args)) { $exe } else { "$exe $args" }
+                    }
                     elseif ($_.PSObject.Properties['Uri']) { $_.Uri }
                     else { $_.GetType().Name }
                 }) -join '; '
@@ -250,18 +265,27 @@ try {
     Write-Host "Targets       : $($targets.Count)"
     Write-Host "Output folder : $OutputFolder"
     Write-Host "Throttle limit: $ThrottleLimit"
-    Write-Host "Timeout       : $TimeoutSeconds seconds per server"
+    Write-Host "Timeout       : $TimeoutSeconds seconds per server (operation timeout)"
+    Write-Host "Transport     : $(if ($UseSSL) { 'HTTPS' } else { 'HTTP' })$(if ($PSBoundParameters.ContainsKey('Port')) { " (port $Port)" })"
+    Write-Host "Auth          : $Authentication"
     Write-Host ""
 
+    # Cap remoting operations at the requested timeout so a single hung target can't stall the whole run.
+    $sessionOption = New-PSSessionOption -OperationTimeout ($TimeoutSeconds * 1000) -OpenTimeout 60000 -CancelTimeout 30000
+
     $invokeParams = @{
-        ComputerName  = $targets
-        ScriptBlock   = $RemoteInventoryScriptBlock
-        ArgumentList  = @(, $CertificateStore)
-        ThrottleLimit = $ThrottleLimit
-        ErrorAction   = 'Continue'
-        ErrorVariable = 'remoteErrors'
+        ComputerName   = $targets
+        ScriptBlock    = $RemoteInventoryScriptBlock
+        ArgumentList   = @(, $CertificateStore)
+        ThrottleLimit  = $ThrottleLimit
+        SessionOption  = $sessionOption
+        Authentication = $Authentication
+        ErrorAction    = 'Continue'
+        ErrorVariable  = 'remoteErrors'
     }
     if ($Credential) { $invokeParams['Credential'] = $Credential }
+    if ($UseSSL) { $invokeParams['UseSSL'] = $true }
+    if ($PSBoundParameters.ContainsKey('Port')) { $invokeParams['Port'] = $Port }
 
     Write-Host "Invoking remote collection..." -ForegroundColor Cyan
     $rawResults = @()
@@ -286,6 +310,11 @@ try {
 
     foreach ($item in $rawResults) {
         if (-not $item) { continue }
+        # PSComputerName is set by Invoke-Command to the target string the caller supplied (FQDN or short name).
+        # Overwrite ServerName so the summary join and CSV output match whatever the operator passed on the command line, not $env:COMPUTERNAME.
+        if ($item.PSObject.Properties['PSComputerName'] -and $item.PSComputerName) {
+            $item.ServerName = [string]$item.PSComputerName
+        }
         $cat = [string]$item.Category
         if (-not $byCategory.ContainsKey($cat)) { continue }
         $byCategory[$cat].Add($item)
@@ -333,17 +362,33 @@ try {
         'Certificates.csv'          = $byCategory['Certificate']
         'CollectionErrors.csv'      = $byCategory['CollectionError']
     }
+
+    # Header-only templates so empty categories still produce a parseable CSV with the expected schema.
+    $schemaTemplates = @{
+        'InventorySummary.csv'      = [PSCustomObject][ordered]@{ ServerName = $null; Reached = $null; ConnectionError = $null; RoleCount = $null; FeatureCount = $null; ServiceCount = $null; InstalledAppCount = $null; ScheduledTaskCount = $null; CertificateCount = $null; CollectionErrorAreas = $null }
+        'Roles.csv'                 = [PSCustomObject][ordered]@{ Category = 'Role'; ServerName = $null; Name = $null; DisplayName = $null; FeatureType = $null; Path = $null; Depth = $null; Parent = $null }
+        'Features.csv'              = [PSCustomObject][ordered]@{ Category = 'Feature'; ServerName = $null; Name = $null; DisplayName = $null; FeatureType = $null; Path = $null; Depth = $null; Parent = $null }
+        'Services.csv'              = [PSCustomObject][ordered]@{ Category = 'Service'; ServerName = $null; Name = $null; DisplayName = $null; State = $null; StartMode = $null; StartName = $null; PathName = $null; Description = $null }
+        'InstalledApplications.csv' = [PSCustomObject][ordered]@{ Category = 'InstalledApplication'; ServerName = $null; DisplayName = $null; DisplayVersion = $null; Publisher = $null; InstallDate = $null; InstallLocation = $null; UninstallString = $null; Architecture = $null }
+        'ScheduledTasks.csv'        = [PSCustomObject][ordered]@{ Category = 'ScheduledTask'; ServerName = $null; TaskPath = $null; TaskName = $null; State = $null; RunAs = $null; Actions = $null; LastRunTime = $null; LastResult = $null; NextRunTime = $null; Author = $null; Description = $null }
+        'Certificates.csv'          = [PSCustomObject][ordered]@{ Category = 'Certificate'; ServerName = $null; Store = $null; Subject = $null; Issuer = $null; NotBefore = $null; NotAfter = $null; Thumbprint = $null; HasPrivateKey = $null; FriendlyName = $null; EnhancedKeyUsage = $null; SubjectAltNames = $null }
+        'CollectionErrors.csv'      = [PSCustomObject][ordered]@{ Category = 'CollectionError'; ServerName = $null; Area = $null; Message = $null }
+    }
+
     foreach ($fileName in $exports.Keys) {
         $rows = $exports[$fileName]
         $path = Join-Path $OutputFolder $fileName
         if ($rows -and @($rows).Count -gt 0) {
             # Drop the note properties WinRM adds to every remoted object.
             @($rows) |
-                Select-Object -Property * -ExcludeProperty PSComputerName, RunspaceId, PSShowComputerName |
-                Export-Csv -Path $path -NoTypeInformation -Encoding UTF8
+            Select-Object -Property * -ExcludeProperty PSComputerName, RunspaceId, PSShowComputerName |
+            Export-Csv -Path $path -NoTypeInformation -Encoding UTF8
+        }
+        elseif ($schemaTemplates.ContainsKey($fileName)) {
+            # Emit just the header row so downstream parsers see a consistent schema.
+            $schemaTemplates[$fileName] | ConvertTo-Csv -NoTypeInformation | Select-Object -First 1 | Set-Content -Path $path -Encoding UTF8
         }
         else {
-            # Keep an empty file so downstream tooling doesn't need to special-case missing outputs.
             Set-Content -Path $path -Value '' -Encoding UTF8
         }
     }

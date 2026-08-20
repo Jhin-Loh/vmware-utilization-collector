@@ -2,17 +2,24 @@ SET NOCOUNT ON;
 SET DEADLOCK_PRIORITY LOW;
 SET LOCK_TIMEOUT 5000;
 
--- Server / FQDN
+-- Server / FQDN (domain suffix read at runtime from the host's TCP/IP parameters; no client-specific literals baked into this script.)
 DECLARE @MachineName varchar(128) = CAST(SERVERPROPERTY('MachineName') AS varchar(128));
-DECLARE @FQDN varchar(300);
+DECLARE @FQDN varchar(300) = @MachineName;
+DECLARE @DomainSuffix nvarchar(300) = NULL;
 
-SET @FQDN =
-    CASE
-        WHEN @MachineName LIKE 'PDWDMSTAR%' THEN @MachineName + '.corpdev.apdev.local'
-        WHEN @MachineName LIKE 'PPWDMSTAR%' THEN @MachineName + '.corp.auspost.local'
-        WHEN @MachineName LIKE 'PTWDMSTAR%' THEN @MachineName + '.corptest.aptest.local'
-        ELSE @MachineName
-    END;
+BEGIN TRY
+    EXEC master.dbo.xp_regread
+        @rootkey    = N'HKEY_LOCAL_MACHINE',
+        @key        = N'SYSTEM\CurrentControlSet\Services\Tcpip\Parameters',
+        @value_name = N'Domain',
+        @value      = @DomainSuffix OUTPUT;
+END TRY
+BEGIN CATCH
+    SET @DomainSuffix = NULL;
+END CATCH;
+
+IF @DomainSuffix IS NOT NULL AND LEN(@DomainSuffix) > 0
+    SET @FQDN = @MachineName + '.' + CAST(@DomainSuffix AS varchar(300));
 
 -- Linked Servers
 DECLARE @LinkedServerCount int = 0,
@@ -47,11 +54,7 @@ DECLARE @SSRSReportServerPresent varchar(5) = 'FALSE',
         @SSRSTopReports90d nvarchar(max) = N'',
         @SSRSWarning nvarchar(4000) = N'';
 
-
-/* ============================================================
-   Linked Server inventory
-   ============================================================ */
-
+-- Linked Server Discovery
 BEGIN TRY
     SELECT @LinkedServerCount = COUNT(*)
     FROM sys.servers
@@ -71,9 +74,7 @@ BEGIN CATCH
 END CATCH;
 
 
-/* ============================================================
-   Linked Server dependency discovery
-   ============================================================ */
+-- Linked Server Depdendencies
 
 DECLARE @DB sysname,
         @SQL nvarchar(max),
@@ -151,9 +152,7 @@ CLOSE db_cursor;
 DEALLOCATE db_cursor;
 
 
-/* ============================================================
-   SSIS
-   ============================================================ */
+-- SSIS Discovery and Usage stats
 
 IF DB_ID('SSISDB') IS NOT NULL
 BEGIN
@@ -217,8 +216,8 @@ BEGIN
     END CATCH;
 END;
 
+-- SSIS Legacy Package
 
--- Legacy SSIS packages
 IF OBJECT_ID('msdb.dbo.sysssispackages') IS NOT NULL
 BEGIN
     BEGIN TRY
@@ -243,6 +242,7 @@ END;
 
 
 -- SSIS SQL Agent jobs
+
 BEGIN TRY
     SELECT @SSISAgentJobStepCount = COUNT(*)
     FROM msdb.dbo.sysjobsteps
@@ -266,26 +266,33 @@ BEGIN CATCH
 END CATCH;
 
 
-/* ============================================================
-   SSRS
-   ============================================================ */
+-- SSRS Discovery and Usage stats
 
-IF DB_ID('ReportServer') IS NOT NULL
+-- Detect both default (ReportServer) and named-instance (ReportServer$INSTANCE) catalog databases.
+DECLARE @SSRSReportServerDb sysname = NULL;
+
+SELECT TOP (1) @SSRSReportServerDb = name
+FROM sys.databases
+WHERE (name = N'ReportServer' OR name LIKE N'ReportServer$%')
+  AND name NOT LIKE N'%TempDB'
+ORDER BY name;
+
+IF @SSRSReportServerDb IS NOT NULL
 BEGIN
     SET @SSRSReportServerPresent = 'TRUE';
 
     BEGIN TRY
-        SET @SQL = N'
+        SET @SQL = REPLACE(N'
         DECLARE @Since datetime = DATEADD(day, -90, GETDATE());
 
         SELECT @ReportCountOUT = COUNT(*)
-        FROM ReportServer.dbo.Catalog
+        FROM {DB}.dbo.Catalog
         WHERE Type = 2;
 
         SELECT @ReportListOUT = ISNULL(
             STUFF((
                 SELECT ''; '' + c.Path
-                FROM ReportServer.dbo.Catalog c
+                FROM {DB}.dbo.Catalog c
                 WHERE c.Type = 2
                 ORDER BY c.Path
                 FOR XML PATH(''''),TYPE
@@ -293,20 +300,20 @@ BEGIN
 
         SELECT @SubscriptionCountOUT = COUNT(*),
                @LastSubscriptionOUT = MAX(LastRunTime)
-        FROM ReportServer.dbo.Subscriptions;
+        FROM {DB}.dbo.Subscriptions;
 
         SELECT @SubscriptionListOUT = ISNULL(
             STUFF((
                 SELECT ''; '' + c.Path + '' ['' + ISNULL(s.Description,'''') + '']''
-                FROM ReportServer.dbo.Subscriptions s
-                JOIN ReportServer.dbo.Catalog c ON s.Report_OID = c.ItemID
+                FROM {DB}.dbo.Subscriptions s
+                JOIN {DB}.dbo.Catalog c ON s.Report_OID = c.ItemID
                 ORDER BY c.Path
                 FOR XML PATH(''''),TYPE
             ).value(''.'',''nvarchar(max)''),1,2,''''),N'''');
 
         SELECT @ActiveReports90dOUT = COUNT(DISTINCT ItemPath),
                @TotalRuns90dOUT = COUNT_BIG(*)
-        FROM ReportServer.dbo.ExecutionLog3
+        FROM {DB}.dbo.ExecutionLog3
         WHERE TimeStart >= @Since;
 
         SELECT @TopReports90dOUT = ISNULL(
@@ -314,14 +321,15 @@ BEGIN
                 SELECT ''; '' + t.ItemPath + '' ('' + CAST(t.run_count AS varchar(20)) + '' runs)''
                 FROM (
                     SELECT TOP (5) ItemPath, COUNT_BIG(*) AS run_count
-                    FROM ReportServer.dbo.ExecutionLog3
+                    FROM {DB}.dbo.ExecutionLog3
                     WHERE TimeStart >= @Since
                     GROUP BY ItemPath
                     ORDER BY COUNT_BIG(*) DESC
                 ) t
                 ORDER BY t.run_count DESC
                 FOR XML PATH(''''),TYPE
-            ).value(''.'',''nvarchar(max)''),1,2,''''),N'''');';
+            ).value(''.'',''nvarchar(max)''),1,2,''''),N'''');',
+            '{DB}', QUOTENAME(@SSRSReportServerDb));
 
         EXEC sys.sp_executesql
             @SQL,
@@ -343,10 +351,7 @@ BEGIN
     END CATCH;
 END;
 
-
-/* ============================================================
-   SQL / DB / File / AG metadata
-   ============================================================ */
+-- SQL / DB / File / AG metadata Discovery
 
 ;WITH ServerInfo AS
 (
