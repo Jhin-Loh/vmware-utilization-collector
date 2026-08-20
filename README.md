@@ -543,10 +543,23 @@ Script: `Get-SQLServer2016Stats.sql`
 
 ### Required Access (Read-Only Scope)
 
-- Read-only SQL login.
-- Server-level metadata and DMV read access (commonly `VIEW SERVER STATE`).
-- Read access to `msdb` and, when present, SSISDB and ReportServer catalog metadata.
-- The script performs only SELECT-style discovery; it does not modify data.
+- SQL login with CONNECT rights to the SQL Server instance.
+- Server-level permission: VIEW SERVER STATE.
+- Read access to system metadata queried by this script in:
+  - master (server metadata and linked-server metadata).
+  - msdb (sysjobs, sysjobsteps, sysssispackages).
+  - SSISDB when present (catalog views for package inventory and execution history).
+  - ReportServer or ReportServer$INSTANCE when present (Catalog, Subscriptions, ExecutionLog3).
+- For AG metadata, the same VIEW SERVER STATE permission is required.
+- Optional for FQDN enrichment only: permission to execute master.dbo.xp_regread. If unavailable, the script falls back to machine name.
+- The script performs discovery reads only; it does not modify data.
+
+Practical role mapping for a read-only account:
+
+- Instance-level: VIEW SERVER STATE.
+- msdb: SQLAgentReaderRole (or equivalent SELECT access to dbo.sysjobs and dbo.sysjobsteps).
+- SSISDB (if used): ssis_logreader role or equivalent SELECT on catalog views.
+- ReportServer database(s) (if used): db_datareader.
 
 ### How To Run
 
@@ -555,6 +568,7 @@ In SSMS:
 - Open `Get-SQLServer2016Stats.sql`.
 - Connect to the target SQL Server instance.
 - Execute and save the single result set to CSV (for example `SqlSummary.csv`).
+- Prefer Results to Text or direct file export. Copying from grid can mangle multi-line list fields.
 
 With sqlcmd:
 
@@ -562,9 +576,31 @@ With sqlcmd:
 sqlcmd -S "sqlhost\instance" -E -i ".\Get-SQLServer2016Stats.sql" -s "," -W -h-1 -o ".\ExampleOutputs\SQLServer2016Stats\SqlSummary.csv"
 ```
 
+With Invoke-SqlCmd (PowerShell):
+
+```powershell
+$rows = Invoke-SqlCmd -ServerInstance "sqlhost\instance" -InputFile ".\Get-SQLServer2016Stats.sql" -ErrorAction Stop
+$rows | Export-Csv -Path ".\ExampleOutputs\SQLServer2016Stats\SqlSummary.csv" -NoTypeInformation -Encoding UTF8
+```
+
+Using sqlcmd or Invoke-SqlCmd avoids SSMS grid copy issues with long or multi-line columns.
+
 ### Expected Output
 
 - One tabular result set (typically exported as `SqlSummary.csv`) containing server, database, storage, linked-server dependency, SSIS, and SSRS discovery fields.
+
+Linked-server dependency caveat:
+
+- `Linked server dependency count` and `Linked server dependencies` are lower-bound discovery results.
+- They capture static metadata-visible dependencies (for example four-part-name references in SQL objects).
+- Dynamic SQL and application-side linked-server usage are not fully visible to this script.
+
+### AG Node Aggregation Note
+
+If you run the SQL script on every Availability Group node, each node can return rows for the same production database. To avoid double-counting database sizes in estate rollups:
+
+- Use the `Is primary replica` column and aggregate AG database size metrics from primary rows only (`TRUE`).
+- Alternatively deduplicate by availability-group/database identity before summing capacity.
 
 ### Data Sensitivity
 

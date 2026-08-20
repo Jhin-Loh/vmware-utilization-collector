@@ -472,12 +472,12 @@ SELECT
 
     s.LogicalCPUCount AS [Logical CPU Count],
     s.HyperthreadRatio AS [Hyperthread Ratio],
-    s.PhysicalCPUCount AS [Physical CPU Count],
+    s.PhysicalCPUCount AS [Estimated CPU package count],
 
     CASE WHEN SERVERPROPERTY('IsClustered')=1 THEN 'TRUE' ELSE 'FALSE' END AS [Is FCI Enabled],
     CASE WHEN SERVERPROPERTY('IsClustered')=1
          THEN CAST(SERVERPROPERTY('MachineName') AS nvarchar(128))
-         ELSE '' END AS [Failover cluster name],
+            ELSE '' END AS [SQL network name (FCI virtual name)],
 
     s.MaxServerMemoryMB AS [Max server memory (in MB)],
     CAST(SERVERPROPERTY('ProductLevel') AS nvarchar(128)) AS [Service pack],
@@ -505,6 +505,10 @@ SELECT
     ISNULL(ag.replica_server_name,'') AS [Availability replica name],
     ISNULL(ag.availability_mode_desc,'') AS [Commit mode],
     ISNULL(ag.role_desc,'') AS [Replica type],
+        CASE WHEN ag.database_id IS NULL THEN ''
+            WHEN ag.role_desc='PRIMARY' THEN 'TRUE'
+            WHEN ag.role_desc='SECONDARY' THEN 'FALSE'
+            ELSE '' END AS [Is primary replica],
     ISNULL(ag.operational_state_desc,'') AS [Replica state],
     ISNULL(ag.IsMultiSubnet,'FALSE') AS [Is AG multi subnet],
     ISNULL(ag.synchronization_state_desc,'') AS [AG replica sync status],
