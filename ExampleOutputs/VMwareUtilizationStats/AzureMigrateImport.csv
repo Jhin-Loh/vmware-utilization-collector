@@ -1,4 +1,4 @@
 "Server name","IP addresses","Cores","Memory (In MB)","OS name","OS version","OS architecture","Server type","Hypervisor","CPU utilization percentage","Peak CPU utilization percentage","Memory utilization percentage","Peak memory utilization percentage","Network In throughput (MB per second)","Peak Network In throughput (MB per second)","Network Out throughput (MB per second)","Peak Network Out throughput (MB per second)","Boot Type","Number of disks","Storage in use (In GB)"
-"WIN-DEMO-APP01","","4","8192","Microsoft Windows Server 2016 (64-bit)","2016","64-bit","Virtual","Vmware","3.61","3.78","4.99","6.99","0","0","0","0","UEFI","1","68.09"
-"WIN-DEMO-APP03","","2","4096","Microsoft Windows Server 2019 (64-bit)","2019","64-bit","Virtual","Vmware","4.26","4.49","7.99","9.99","0","0","0","0","UEFI","2","94.08"
-"Test","","2","4096","Microsoft Windows Server 2019 (64-bit)","2019","64-bit","Virtual","Vmware","0.62","0.93","5.99","7.99","0","0","0","0","UEFI","1","44.08"
+"WIN-DEMO-APP01","","4","8192","Microsoft Windows Server 2016 (64-bit)","2016","64-bit","Virtual","Vmware","3.6","8.89","10.99","16.99","0","0.07","0","0.02","UEFI","1","68.09"
+"WIN-DEMO-APP03","","2","4096","Microsoft Windows Server 2019 (64-bit)","2019","64-bit","Virtual","Vmware","4.2","4.58","8.99","8.99","0","0","0","0","UEFI","2","94.08"
+"Test","","2","4096","Microsoft Windows Server 2019 (64-bit)","2019","64-bit","Virtual","Vmware","0.59","0.97","5.99","6.99","0","0","0","0","UEFI","1","44.08"

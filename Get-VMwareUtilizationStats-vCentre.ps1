@@ -292,6 +292,16 @@ function Get-VMInventoryData {
         $storageInUseGB = $null
     }
 
+    # GuestMemoryUsage comes from VMware Tools guest telemetry (MB) and can be null when tools are unavailable.
+    $guestMemoryUsageMB = $VM.ExtensionData.Summary.QuickStats.GuestMemoryUsage
+    if ($null -ne $guestMemoryUsageMB -and $guestMemoryUsageMB -ge 0 -and $config.Hardware.MemoryMB -gt 0) {
+        $guestMemoryUsagePercent = [math]::Round(([double]$guestMemoryUsageMB / [double]$config.Hardware.MemoryMB) * 100, 2)
+    }
+    else {
+        $guestMemoryUsageMB = $null
+        $guestMemoryUsagePercent = $null
+    }
+
     [PSCustomObject]@{
         IPAddresses     = $ipAddresses -join '; '
         OSName          = [string]$osName
@@ -301,6 +311,8 @@ function Get-VMInventoryData {
         NetworkAdapters = [int]$VM.ExtensionData.Summary.Config.NumEthernetCards
         NumberOfDisks   = [int]$VM.ExtensionData.Summary.Config.NumVirtualDisks
         StorageInUseGB  = $storageInUseGB
+        GuestMemoryUsageMB = $guestMemoryUsageMB
+        GuestMemoryUsagePercent = $guestMemoryUsagePercent
     }
 }
 
@@ -430,7 +442,8 @@ try {
     $seenSummarySamples = [System.Collections.Generic.HashSet[string]]::new()
     $seenPerDiskSamples = [System.Collections.Generic.HashSet[string]]::new()
     # Optional per-sample capture for the raw-samples evidence CSV.
-    $rawSamples = if ($IncludeRawSamples) { [System.Collections.Generic.List[object]]::new() } else { $null }
+    $captureRawSamples = [bool]$IncludeRawSamples
+    $rawSamples = if ($captureRawSamples) { (New-Object System.Collections.ArrayList) } else { $null }
     $batches = @(Split-IntoBatches -InputArray $targetVMs -BatchSize $BatchSize)
     $totalSteps = $intervalPlan.Count * $batches.Count
     $step = 0
@@ -497,17 +510,17 @@ try {
                     })
                 [void]$vmsWithData.Add($entityId)
 
-                if ($null -ne $rawSamples) {
-                    $rawSamples.Add([PSCustomObject]@{
+                if ($captureRawSamples) {
+                    if ($null -eq $rawSamples) { $rawSamples = New-Object System.Collections.ArrayList }
+                    [void]$rawSamples.Add([PSCustomObject]@{
                             VMName                 = [string]$stat.Entity
-                            VMMoRef                = $entityId
                             MetricId               = $stat.MetricId
                             TimestampUtc           = ([datetime]$stat.Timestamp).ToUniversalTime()
                             SampleIntervalSeconds  = $sampleIntervalSeconds
                             RawValue               = [double]$stat.Value
                             ConvertedValue         = $value
                             Unit                   = [string]$stat.Unit
-                            Instance               = [string]$stat.Instance
+                            'Disk instance'        = [string]$stat.Instance
                             SegmentLevel           = $segment.Level
                             SegmentIntervalMinutes = $segment.IntervalMins
                         })
@@ -540,17 +553,17 @@ try {
                 }
                 [void]$perDiskInstances[$entityId].Add($instance)
 
-                if ($null -ne $rawSamples) {
-                    $rawSamples.Add([PSCustomObject]@{
+                if ($captureRawSamples) {
+                    if ($null -eq $rawSamples) { $rawSamples = New-Object System.Collections.ArrayList }
+                    [void]$rawSamples.Add([PSCustomObject]@{
                             VMName                 = [string]$stat.Entity
-                            VMMoRef                = $entityId
                             MetricId               = $stat.MetricId
                             TimestampUtc           = ([datetime]$stat.Timestamp).ToUniversalTime()
                             SampleIntervalSeconds  = $sampleIntervalSeconds
                             RawValue               = [double]$stat.Value
                             ConvertedValue         = [double]$stat.Value
                             Unit                   = [string]$stat.Unit
-                            Instance               = $instance
+                            'Disk instance'        = $instance
                             SegmentLevel           = $segment.Level
                             SegmentIntervalMinutes = $segment.IntervalMins
                         })
@@ -570,6 +583,8 @@ try {
             'PowerState'                                     = $vm.PowerState.ToString()
             'Cores'                                          = $vm.NumCpu
             'Memory (In MB)'                                 = [int]$vm.ExtensionData.Config.Hardware.MemoryMB
+            'Guest memory usage current (MB)'                = $inventory.GuestMemoryUsageMB
+            'Guest memory usage current percentage'          = $inventory.GuestMemoryUsagePercent
             'OS name'                                        = $inventory.OSName
             'OS version'                                     = $inventory.OSVersion
             'OS architecture'                                = $inventory.OSArchitecture
@@ -590,9 +605,6 @@ try {
             'Network In throughput maximum (MB per second)'  = $null
             'Network Out throughput average (MB per second)' = $null
             'Network Out throughput maximum (MB per second)' = $null
-            'Boot Type'                                      = $inventory.BootType
-            'Number of disks'                                = $inventory.NumberOfDisks
-            'Storage in use (In GB)'                         = $inventory.StorageInUseGB
         }
 
         foreach ($def in $StatDefinitions) {
@@ -627,6 +639,10 @@ try {
                 if ($percentileColumn) { $row[$percentileColumn] = $null }
             }
         }
+
+        $row['Boot Type'] = $inventory.BootType
+        $row['Number of disks'] = $inventory.NumberOfDisks
+        $row['Storage in use (In GB)'] = $inventory.StorageInUseGB
 
         [PSCustomObject]$row
     }
@@ -761,16 +777,25 @@ try {
 
     $summaryRows | Export-Csv -Path $summaryPath -NoTypeInformation
 
-    if ($IncludeRawSamples) {
+    if ($captureRawSamples) {
         $rawPath = Join-Path $OutputFolder 'RawSamples.csv'
+        $summarySampleCount = (($summaryAccumulator.Values | ForEach-Object { $_.Count } | Measure-Object -Sum).Sum)
+        if ($null -eq $summarySampleCount) { $summarySampleCount = 0 }
+        $perDiskSampleCount = (($perDiskAccumulator.Values | ForEach-Object { $_.Count } | Measure-Object -Sum).Sum)
+        if ($null -eq $perDiskSampleCount) { $perDiskSampleCount = 0 }
+        $accumulatedSampleCount = [int]$summarySampleCount + [int]$perDiskSampleCount
+
+        if ($rawSamples.Count -eq 0 -and $accumulatedSampleCount -gt 0) {
+            Write-Warning "Raw sample capture produced zero rows even though $accumulatedSampleCount sample(s) were accumulated. This indicates raw-capture gating did not execute as expected."
+        }
+
         if ($rawSamples -and $rawSamples.Count -gt 0) {
-            $rawSamples | Export-Csv -Path $rawPath -NoTypeInformation
+            $rawSamples | Sort-Object VMName, MetricId, 'Disk instance', TimestampUtc | Export-Csv -Path $rawPath -NoTypeInformation
             Write-Host "Raw samples CSV      : $rawPath (rows: $($rawSamples.Count))"
         }
         else {
-            # Emit header-only file so downstream tooling doesn't need to special-case an empty run.
-            [PSCustomObject][ordered]@{ VMName = $null; VMMoRef = $null; MetricId = $null; TimestampUtc = $null; SampleIntervalSeconds = $null; RawValue = $null; ConvertedValue = $null; Unit = $null; Instance = $null; SegmentLevel = $null; SegmentIntervalMinutes = $null } |
-            ConvertTo-Csv -NoTypeInformation | Select-Object -First 1 | Set-Content -Path $rawPath -Encoding UTF8
+            [PSCustomObject][ordered]@{ VMName = $null; MetricId = $null; TimestampUtc = $null; SampleIntervalSeconds = $null; RawValue = $null; ConvertedValue = $null; Unit = $null; 'Disk instance' = $null; SegmentLevel = $null; SegmentIntervalMinutes = $null } |
+                ConvertTo-Csv -NoTypeInformation | Select-Object -First 1 | Set-Content -Path $rawPath -Encoding UTF8
             Write-Host "Raw samples CSV      : $rawPath (empty header only)"
         }
     }
@@ -804,6 +829,7 @@ try {
         }
         $azmRows | Export-Csv -Path $azmPath -NoTypeInformation
         Write-Host "Azure Migrate CSV    : $azmPath (single-value cells = P$Percentile; peaks = window maximum)"
+        Write-Warning "In AzureMigrateImport.csv, memory columns are mapped from VMware active memory (not guest-consumed)."
     }
 
     Write-Host ""

@@ -300,6 +300,16 @@ function Get-VMInventoryData {
         $storageInUseGB = $null
     }
 
+    # GuestMemoryUsage comes from VMware Tools guest telemetry (MB) and can be null when tools are unavailable.
+    $guestMemoryUsageMB = $VM.ExtensionData.Summary.QuickStats.GuestMemoryUsage
+    if ($null -ne $guestMemoryUsageMB -and $guestMemoryUsageMB -ge 0 -and $config.Hardware.MemoryMB -gt 0) {
+        $guestMemoryUsagePercent = [math]::Round(([double]$guestMemoryUsageMB / [double]$config.Hardware.MemoryMB) * 100, 2)
+    }
+    else {
+        $guestMemoryUsageMB = $null
+        $guestMemoryUsagePercent = $null
+    }
+
     [PSCustomObject]@{
         IPAddresses     = $ipAddresses -join '; '
         OSName          = [string]$osName
@@ -309,6 +319,8 @@ function Get-VMInventoryData {
         NetworkAdapters = [int]$VM.ExtensionData.Summary.Config.NumEthernetCards
         NumberOfDisks   = [int]$VM.ExtensionData.Summary.Config.NumVirtualDisks
         StorageInUseGB  = $storageInUseGB
+        GuestMemoryUsageMB = $guestMemoryUsageMB
+        GuestMemoryUsagePercent = $guestMemoryUsagePercent
     }
 }
 
@@ -551,12 +563,13 @@ try {
                     $value = $value / $sampleIntervalSeconds
                 }
 
-                $vmDisplayName = [string]$stat.Entity
+                # MoRef keying avoids merging two VMs that happen to share a display name across folders/clusters.
+                $entityId = if ($stat.Entity.PSObject.Properties['Id']) { [string]$stat.Entity.Id } else { [string]$stat.Entity }
                 $timestampTicks = ([datetime]$stat.Timestamp).Ticks
-                $dedupKey = "$vmDisplayName|$($stat.MetricId)|$timestampTicks"
+                $dedupKey = "$entityId|$($stat.MetricId)|$timestampTicks"
                 if (-not $seenSummarySamples.Add($dedupKey)) { continue }
 
-                $key = "$vmDisplayName|$($stat.MetricId)"
+                $key = "$entityId|$($stat.MetricId)"
                 if (-not $summaryAccumulator.ContainsKey($key)) {
                     $summaryAccumulator[$key] = [System.Collections.Generic.List[object]]::new()
                 }
@@ -565,7 +578,7 @@ try {
                         Weight    = $sampleIntervalSeconds
                         Timestamp = [datetime]$stat.Timestamp
                     })
-                [void]$vmsWithData.Add($vmDisplayName)
+                [void]$vmsWithData.Add($entityId)
 
                 if ($captureRawSamples) {
                     if ($null -eq $rawSamples) { $rawSamples = New-Object System.Collections.ArrayList }
@@ -588,14 +601,14 @@ try {
                 $statDef = $PerDiskStatDefLookup[$stat.MetricId]
                 if (-not $statDef -or [string]::IsNullOrWhiteSpace($stat.Instance)) { continue }
 
-                $vmDisplayName = [string]$stat.Entity
+                $entityId = if ($stat.Entity.PSObject.Properties['Id']) { [string]$stat.Entity.Id } else { [string]$stat.Entity }
                 $instance = [string]$stat.Instance
                 $sampleIntervalSeconds = if ($stat.IntervalSecs -gt 0) { [int]$stat.IntervalSecs } else { [int]$segment.SampleIntervalSeconds }
                 $timestampTicks = ([datetime]$stat.Timestamp).Ticks
-                $dedupKey = "$vmDisplayName|$($stat.MetricId)|$instance|$timestampTicks"
+                $dedupKey = "$entityId|$($stat.MetricId)|$instance|$timestampTicks"
                 if (-not $seenPerDiskSamples.Add($dedupKey)) { continue }
 
-                $key = "$vmDisplayName|$($stat.MetricId)|$instance"
+                $key = "$entityId|$($stat.MetricId)|$instance"
                 if (-not $perDiskAccumulator.ContainsKey($key)) {
                     $perDiskAccumulator[$key] = [System.Collections.Generic.List[object]]::new()
                 }
@@ -605,10 +618,10 @@ try {
                         Timestamp = [datetime]$stat.Timestamp
                     })
 
-                if (-not $perDiskInstances.ContainsKey($vmDisplayName)) {
-                    $perDiskInstances[$vmDisplayName] = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+                if (-not $perDiskInstances.ContainsKey($entityId)) {
+                    $perDiskInstances[$entityId] = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
                 }
-                [void]$perDiskInstances[$vmDisplayName].Add($instance)
+                [void]$perDiskInstances[$entityId].Add($instance)
 
                 if ($captureRawSamples) {
                     if ($null -eq $rawSamples) { $rawSamples = New-Object System.Collections.ArrayList }
@@ -640,6 +653,8 @@ try {
             'PowerState'                                     = $vm.PowerState.ToString()
             'Cores'                                          = $vm.NumCpu
             'Memory (In MB)'                                 = [int]$vm.ExtensionData.Config.Hardware.MemoryMB
+            'Guest memory usage current (MB)'                = $inventory.GuestMemoryUsageMB
+            'Guest memory usage current percentage'          = $inventory.GuestMemoryUsagePercent
             'OS name'                                        = $inventory.OSName
             'OS version'                                     = $inventory.OSVersion
             'OS architecture'                                = $inventory.OSArchitecture
@@ -660,13 +675,10 @@ try {
             'Network In throughput maximum (MB per second)'  = $null
             'Network Out throughput average (MB per second)' = $null
             'Network Out throughput maximum (MB per second)' = $null
-            'Boot Type'                                      = $inventory.BootType
-            'Number of disks'                                = $inventory.NumberOfDisks
-            'Storage in use (In GB)'                         = $inventory.StorageInUseGB
         }
 
         foreach ($def in $StatDefinitions) {
-            $key = "$($vm.Name)|$($def.MetricId)"
+            $key = "$($vm.Id)|$($def.MetricId)"
             $samples = $summaryAccumulator[$key]
 
             $percentileColumn = if ($def.PercentileColumn) { $def.PercentileColumn -replace '\{P\}', $Percentile } else { $null }
@@ -697,6 +709,10 @@ try {
             }
         }
 
+        $row['Boot Type'] = $inventory.BootType
+        $row['Number of disks'] = $inventory.NumberOfDisks
+        $row['Storage in use (In GB)'] = $inventory.StorageInUseGB
+
         [PSCustomObject]$row
     }
 
@@ -711,8 +727,8 @@ try {
                     if ($_.DeviceInfo.Label -match '(\d+)$') { [int]$Matches[1] } else { [int]::MaxValue }
                 } 
             })
-        $availableInstances = if ($perDiskInstances.ContainsKey($vm.Name)) {
-            @($perDiskInstances[$vm.Name] | Sort-Object)
+        $availableInstances = if ($perDiskInstances.ContainsKey($vm.Id)) {
+            @($perDiskInstances[$vm.Id] | Sort-Object)
         }
         else {
             @()
@@ -748,7 +764,7 @@ try {
             $missingMetrics = [System.Collections.Generic.List[string]]::new()
             foreach ($def in $PerDiskStatDefinitions) {
                 $samples = if ($performanceInstance) {
-                    $perDiskAccumulator["$($vm.Name)|$($def.MetricId)|$performanceInstance"]
+                    $perDiskAccumulator["$($vm.Id)|$($def.MetricId)|$performanceInstance"]
                 }
                 else {
                     $null
@@ -881,13 +897,14 @@ try {
         }
         $azmRows | Export-Csv -Path $azmPath -NoTypeInformation
         Write-Host "Azure Migrate CSV    : $azmPath (single-value cells = P$Percentile; peaks = window maximum)"
+        Write-Warning "In AzureMigrateImport.csv, memory columns are mapped from VMware active memory (not guest-consumed)."
     }
 
     Write-Host ""
     Write-Host "=== Collection complete ===" -ForegroundColor Cyan
     Write-Host "VMs processed        : $($targetVMs.Count)"
     Write-Host "Virtual disks        : $(@($diskSummaryRows).Count)"
-    $noDataVMs = @($targetVMs | Where-Object { -not $vmsWithData.Contains($_.Name) } | Select-Object -ExpandProperty Name)
+    $noDataVMs = @($targetVMs | Where-Object { -not $vmsWithData.Contains($_.Id) } | Select-Object -ExpandProperty Name)
     if ($noDataVMs.Count -gt 0) {
         Write-Warning "$($noDataVMs.Count) VM(s) returned no performance data at all: $($noDataVMs -join ', ')"
     }

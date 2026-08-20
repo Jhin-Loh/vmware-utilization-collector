@@ -205,6 +205,13 @@ The mapping is deliberate:
 - Single-value utilization fields use the configured percentile (default P95).
 - Peak fields use the window maximum.
 
+Memory caveat for sizing:
+
+- `Memory utilization percentage` and `Peak memory utilization percentage` in `AzureMigrateImport.csv` are sourced from VMware active memory (`mem.usage.average`), not guest-consumed memory.
+- These values are commonly lower than in-guest telemetry (for example New Relic) by design; the two sources are not directly comparable.
+- For sizing context, use the `Memory consumed average (MB)`, `Memory consumed maximum (MB)`, and `Memory consumed P<Percentile> (MB)` columns in `UtilizationSummary.csv` and/or guest-level counters.
+- `UtilizationSummary.csv` now also includes current guest-memory counters from VMware Tools telemetry: `Guest memory usage current (MB)` and `Guest memory usage current percentage` (point-in-time values, not window percentiles).
+
 This avoids manual average-vs-maximum choices during import preparation.
 
 ### Percentile
@@ -354,20 +361,22 @@ The server-level columns are exported in this order:
 4. `PowerState`
 5. `Cores`
 6. `Memory (In MB)`
-7. `OS name`
-8. `OS version`
-9. `OS architecture`
-10. `Server type`
-11. `Hypervisor`
-12. CPU utilization average and maximum
-13. Memory utilization average and maximum
-14. `Network adapters`
-15. Network In throughput average and maximum
-16. Network Out throughput average and maximum
-17. `Boot Type`
-18. `Number of disks`
-19. `Storage in use (In GB)`
-20. The repeating `Disk 1`, `Disk 2`, and later disk columns
+7. `Guest memory usage current (MB)`
+8. `Guest memory usage current percentage`
+9. `OS name`
+10. `OS version`
+11. `OS architecture`
+12. `Server type`
+13. `Hypervisor`
+14. CPU utilization average and maximum
+15. Memory active percentage average and maximum, plus memory consumed average and maximum (MB)
+16. `Network adapters`
+17. Network In throughput average and maximum
+18. Network Out throughput average and maximum
+19. `Boot Type`
+20. `Number of disks`
+21. `Storage in use (In GB)`
+22. The repeating `Disk 1`, `Disk 2`, and later disk columns
 
 Guest IP addresses, the running OS name/version, and some architecture details depend on VMware Tools reporting data from inside the VM. If VMware Tools is unavailable, the script falls back to the OS configured on the VM where possible, and unavailable optional fields remain empty.
 
@@ -457,6 +466,24 @@ If VMware PowerCLI is not installed, the script can prompt to install it. You ca
 ```powershell
 -AutoInstallPowerCLI
 ```
+
+If your client server cannot install directly from PSGallery (for example change-control, proxy, or offline environments), stage PowerCLI offline:
+
+On an internet-connected staging machine:
+
+```powershell
+Save-Module -Name VMware.PowerCLI -Path C:\Temp\PowerCLI -Force
+```
+
+Copy the saved module folder to the target server under your user module path (for example `%USERPROFILE%\Documents\PowerShell\Modules\`).
+
+Then verify on the target server:
+
+```powershell
+Get-Module -ListAvailable VMware.VimAutomation.Core
+```
+
+After offline staging is complete, run the script without `-AutoInstallPowerCLI`.
 
 If your vCenter or ESXi host uses a self-signed certificate, you may need:
 
