@@ -1,6 +1,6 @@
 ﻿**********************
 Windows PowerShell transcript start
-Start time: 20260817210421
+Start time: 20260820143603
 Username: COLIN\Colin
 RunAs User: COLIN\Colin
 Configuration Name: 
@@ -18,17 +18,19 @@ SerializationVersion: 1.1.0.1
 **********************
 === Windows Server inventory collection ===
 Targets       : 3
-Output folder : E:\Projects\AusPost\vmware-utilization-collector\WindowsServerInventory_20260817_210421
+Output folder : .\ExampleOutputs\WindowsServerInventory
 Throttle limit: 8
-Timeout       : 300 seconds per server
+Timeout       : 300 seconds per server (operation timeout)
+Transport     : HTTP
+Auth          : Default
 
 Invoking remote collection...
 
 === Collection complete ===
 Targets total       : 3
 Targets reached     : 3
-Output folder       : E:\Projects\AusPost\vmware-utilization-collector\WindowsServerInventory_20260817_210421
+Output folder       : .\ExampleOutputs\WindowsServerInventory
 **********************
 Windows PowerShell transcript end
-End time: 20260817210424
+End time: 20260820143607
 **********************

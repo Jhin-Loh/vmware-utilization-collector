@@ -32,7 +32,7 @@ param(
     [string]$Authentication = 'Default',
 
     [Parameter(HelpMessage = "Certificate stores to enumerate. Defaults to LocalMachine\\My, WebHosting, Root, CA and TrustedPublisher (server/IIS/code-signing certs plus trust anchors).")]
-    [string[]]$CertificateStore = @('My', 'WebHosting', 'Root', 'CA', 'TrustedPublisher')
+    [string[]]$CertificateStore = @('My', 'WebHosting')
 )
 
 if ([string]::IsNullOrWhiteSpace($OutputFolder)) {
