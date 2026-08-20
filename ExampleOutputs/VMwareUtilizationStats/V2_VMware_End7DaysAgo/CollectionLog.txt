@@ -1,0 +1,52 @@
+﻿**********************
+Windows PowerShell transcript start
+Start time: 20260820150558
+Username: COLIN\Colin
+RunAs User: COLIN\Colin
+Configuration Name: 
+Machine: COLIN (Microsoft Windows NT 10.0.26200.0)
+Host Application: C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe
+Process ID: 4080
+PSVersion: 5.1.26100.9168
+PSEdition: Desktop
+PSCompatibleVersions: 1.0, 2.0, 3.0, 4.0, 5.0, 5.1.26100.9168
+BuildVersion: 10.0.26100.9168
+CLRVersion: 4.0.30319.42000
+WSManStackVersion: 3.0
+PSRemotingProtocolVersion: 2.3
+SerializationVersion: 1.1.0.1
+**********************
+=== VMware utilization collection ===
+vCenter        : 192.168.149.128
+Requested window: 07/30/2026 15:04:32  ->  08/13/2026 15:04:32
+Output folder  : .\ExampleOutputs\V2_VMware_End7DaysAgo
+
+Connecting to 192.168.149.128 ...
+Connected as root to standalone ESXi host (read-only session).
+Target VM scope: 3 VM(s).
+WARNING: Connected directly to ESXi. The requested -Days/-StartDate range is unavailable; collecting up to the latest 60 minute(s) of real-time samples instead.
+
+Collection plan:
+  20-second real-time samples (up to 60 minutes)
+
+Raw samples CSV      : .\ExampleOutputs\V2_VMware_End7DaysAgo\RawSamples.csv (rows: 6660)
+Azure Migrate CSV    : .\ExampleOutputs\V2_VMware_End7DaysAgo\AzureMigrateImport.csv (single-value cells = P95; peaks = window maximum)
+WARNING: In AzureMigrateImport.csv, memory columns are mapped from VMware active memory (not guest-consumed).
+
+=== Collection complete ===
+VMs processed        : 3
+Virtual disks        : 4
+Summary CSV          : .\ExampleOutputs\V2_VMware_End7DaysAgo\UtilizationSummary.csv
+
+Top 10 VMs by average CPU utilization:
+
+Server name    CPU utilization percentage average CPU utilization percentage P95 Memory active percentage average Network In throughput average (MB per second) Network Out throughput average (MB per second)
+-----------    ---------------------------------- ------------------------------ -------------------------------- --------------------------------------------- ----------------------------------------------
+WIN-DEMO-APP03                               3.82                           4.12                             6.89                                             0                                              0
+WIN-DEMO-APP01                               3.34                           3.63                              3.9                                             0                                              0
+Test                                         0.52                           0.63                             5.01                                             0                                              0
+Disconnected from 192.168.149.128.
+**********************
+Windows PowerShell transcript end
+End time: 20260820150600
+**********************
