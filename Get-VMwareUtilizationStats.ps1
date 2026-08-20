@@ -487,7 +487,8 @@ try {
     $seenSummarySamples = [System.Collections.Generic.HashSet[string]]::new()
     $seenPerDiskSamples = [System.Collections.Generic.HashSet[string]]::new()
     # Optional per-sample capture for the raw-samples evidence CSV.
-    $rawSamples = if ($IncludeRawSamples) { [System.Collections.Generic.List[object]]::new() } else { $null }
+    $captureRawSamples = [bool]$IncludeRawSamples
+    $rawSamples = if ($captureRawSamples) { (New-Object System.Collections.ArrayList) } else { $null }
     $batches = @(Split-IntoBatches -InputArray $targetVMs -BatchSize $BatchSize)
     $totalSteps = $intervalPlan.Count * $batches.Count
     $step = 0
@@ -550,13 +551,12 @@ try {
                     $value = $value / $sampleIntervalSeconds
                 }
 
-                # MoRef keying avoids merging two VMs that happen to share a display name across folders/clusters.
-                $entityId = if ($stat.Entity.PSObject.Properties['Id']) { [string]$stat.Entity.Id } else { [string]$stat.Entity }
+                $vmDisplayName = [string]$stat.Entity
                 $timestampTicks = ([datetime]$stat.Timestamp).Ticks
-                $dedupKey = "$entityId|$($stat.MetricId)|$timestampTicks"
+                $dedupKey = "$vmDisplayName|$($stat.MetricId)|$timestampTicks"
                 if (-not $seenSummarySamples.Add($dedupKey)) { continue }
 
-                $key = "$entityId|$($stat.MetricId)"
+                $key = "$vmDisplayName|$($stat.MetricId)"
                 if (-not $summaryAccumulator.ContainsKey($key)) {
                     $summaryAccumulator[$key] = [System.Collections.Generic.List[object]]::new()
                 }
@@ -565,19 +565,19 @@ try {
                         Weight    = $sampleIntervalSeconds
                         Timestamp = [datetime]$stat.Timestamp
                     })
-                [void]$vmsWithData.Add($entityId)
+                [void]$vmsWithData.Add($vmDisplayName)
 
-                if ($null -ne $rawSamples) {
-                    $rawSamples.Add([PSCustomObject]@{
+                if ($captureRawSamples) {
+                    if ($null -eq $rawSamples) { $rawSamples = New-Object System.Collections.ArrayList }
+                    [void]$rawSamples.Add([PSCustomObject]@{
                             VMName                 = [string]$stat.Entity
-                            VMMoRef                = $entityId
                             MetricId               = $stat.MetricId
                             TimestampUtc           = ([datetime]$stat.Timestamp).ToUniversalTime()
                             SampleIntervalSeconds  = $sampleIntervalSeconds
                             RawValue               = [double]$stat.Value
                             ConvertedValue         = $value
                             Unit                   = [string]$stat.Unit
-                            Instance               = [string]$stat.Instance
+                            'Disk instance'        = [string]$stat.Instance
                             SegmentLevel           = $segment.Level
                             SegmentIntervalMinutes = $segment.IntervalMins
                         })
@@ -588,14 +588,14 @@ try {
                 $statDef = $PerDiskStatDefLookup[$stat.MetricId]
                 if (-not $statDef -or [string]::IsNullOrWhiteSpace($stat.Instance)) { continue }
 
-                $entityId = if ($stat.Entity.PSObject.Properties['Id']) { [string]$stat.Entity.Id } else { [string]$stat.Entity }
+                $vmDisplayName = [string]$stat.Entity
                 $instance = [string]$stat.Instance
                 $sampleIntervalSeconds = if ($stat.IntervalSecs -gt 0) { [int]$stat.IntervalSecs } else { [int]$segment.SampleIntervalSeconds }
                 $timestampTicks = ([datetime]$stat.Timestamp).Ticks
-                $dedupKey = "$entityId|$($stat.MetricId)|$instance|$timestampTicks"
+                $dedupKey = "$vmDisplayName|$($stat.MetricId)|$instance|$timestampTicks"
                 if (-not $seenPerDiskSamples.Add($dedupKey)) { continue }
 
-                $key = "$entityId|$($stat.MetricId)|$instance"
+                $key = "$vmDisplayName|$($stat.MetricId)|$instance"
                 if (-not $perDiskAccumulator.ContainsKey($key)) {
                     $perDiskAccumulator[$key] = [System.Collections.Generic.List[object]]::new()
                 }
@@ -605,22 +605,22 @@ try {
                         Timestamp = [datetime]$stat.Timestamp
                     })
 
-                if (-not $perDiskInstances.ContainsKey($entityId)) {
-                    $perDiskInstances[$entityId] = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+                if (-not $perDiskInstances.ContainsKey($vmDisplayName)) {
+                    $perDiskInstances[$vmDisplayName] = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
                 }
-                [void]$perDiskInstances[$entityId].Add($instance)
+                [void]$perDiskInstances[$vmDisplayName].Add($instance)
 
-                if ($null -ne $rawSamples) {
-                    $rawSamples.Add([PSCustomObject]@{
+                if ($captureRawSamples) {
+                    if ($null -eq $rawSamples) { $rawSamples = New-Object System.Collections.ArrayList }
+                    [void]$rawSamples.Add([PSCustomObject]@{
                             VMName                 = [string]$stat.Entity
-                            VMMoRef                = $entityId
                             MetricId               = $stat.MetricId
                             TimestampUtc           = ([datetime]$stat.Timestamp).ToUniversalTime()
                             SampleIntervalSeconds  = $sampleIntervalSeconds
                             RawValue               = [double]$stat.Value
                             ConvertedValue         = [double]$stat.Value
                             Unit                   = [string]$stat.Unit
-                            Instance               = $instance
+                            'Disk instance'        = $instance
                             SegmentLevel           = $segment.Level
                             SegmentIntervalMinutes = $segment.IntervalMins
                         })
@@ -666,7 +666,7 @@ try {
         }
 
         foreach ($def in $StatDefinitions) {
-            $key = "$($vm.Id)|$($def.MetricId)"
+            $key = "$($vm.Name)|$($def.MetricId)"
             $samples = $summaryAccumulator[$key]
 
             $percentileColumn = if ($def.PercentileColumn) { $def.PercentileColumn -replace '\{P\}', $Percentile } else { $null }
@@ -711,8 +711,8 @@ try {
                     if ($_.DeviceInfo.Label -match '(\d+)$') { [int]$Matches[1] } else { [int]::MaxValue }
                 } 
             })
-        $availableInstances = if ($perDiskInstances.ContainsKey($vm.Id)) {
-            @($perDiskInstances[$vm.Id] | Sort-Object)
+        $availableInstances = if ($perDiskInstances.ContainsKey($vm.Name)) {
+            @($perDiskInstances[$vm.Name] | Sort-Object)
         }
         else {
             @()
@@ -748,7 +748,7 @@ try {
             $missingMetrics = [System.Collections.Generic.List[string]]::new()
             foreach ($def in $PerDiskStatDefinitions) {
                 $samples = if ($performanceInstance) {
-                    $perDiskAccumulator["$($vm.Id)|$($def.MetricId)|$performanceInstance"]
+                    $perDiskAccumulator["$($vm.Name)|$($def.MetricId)|$performanceInstance"]
                 }
                 else {
                     $null
@@ -830,14 +830,24 @@ try {
 
     $summaryRows | Export-Csv -Path $summaryPath -NoTypeInformation
 
-    if ($IncludeRawSamples) {
+    if ($captureRawSamples) {
         $rawPath = Join-Path $OutputFolder 'RawSamples.csv'
+        $summarySampleCount = (($summaryAccumulator.Values | ForEach-Object { $_.Count } | Measure-Object -Sum).Sum)
+        if ($null -eq $summarySampleCount) { $summarySampleCount = 0 }
+        $perDiskSampleCount = (($perDiskAccumulator.Values | ForEach-Object { $_.Count } | Measure-Object -Sum).Sum)
+        if ($null -eq $perDiskSampleCount) { $perDiskSampleCount = 0 }
+        $accumulatedSampleCount = [int]$summarySampleCount + [int]$perDiskSampleCount
+
+        if ($rawSamples.Count -eq 0 -and $accumulatedSampleCount -gt 0) {
+            Write-Warning "Raw sample capture produced zero rows even though $accumulatedSampleCount sample(s) were accumulated. This indicates raw-capture gating did not execute as expected."
+        }
+
         if ($rawSamples -and $rawSamples.Count -gt 0) {
-            $rawSamples | Export-Csv -Path $rawPath -NoTypeInformation
+            $rawSamples | Sort-Object VMName, MetricId, 'Disk instance', TimestampUtc | Export-Csv -Path $rawPath -NoTypeInformation
             Write-Host "Raw samples CSV      : $rawPath (rows: $($rawSamples.Count))"
         }
         else {
-            [PSCustomObject][ordered]@{ VMName = $null; VMMoRef = $null; MetricId = $null; TimestampUtc = $null; SampleIntervalSeconds = $null; RawValue = $null; ConvertedValue = $null; Unit = $null; Instance = $null; SegmentLevel = $null; SegmentIntervalMinutes = $null } |
+            [PSCustomObject][ordered]@{ VMName = $null; MetricId = $null; TimestampUtc = $null; SampleIntervalSeconds = $null; RawValue = $null; ConvertedValue = $null; Unit = $null; 'Disk instance' = $null; SegmentLevel = $null; SegmentIntervalMinutes = $null } |
                 ConvertTo-Csv -NoTypeInformation | Select-Object -First 1 | Set-Content -Path $rawPath -Encoding UTF8
             Write-Host "Raw samples CSV      : $rawPath (empty header only)"
         }
@@ -877,7 +887,7 @@ try {
     Write-Host "=== Collection complete ===" -ForegroundColor Cyan
     Write-Host "VMs processed        : $($targetVMs.Count)"
     Write-Host "Virtual disks        : $(@($diskSummaryRows).Count)"
-    $noDataVMs = @($targetVMs | Where-Object { -not $vmsWithData.Contains($_.Id) } | Select-Object -ExpandProperty Name)
+    $noDataVMs = @($targetVMs | Where-Object { -not $vmsWithData.Contains($_.Name) } | Select-Object -ExpandProperty Name)
     if ($noDataVMs.Count -gt 0) {
         Write-Warning "$($noDataVMs.Count) VM(s) returned no performance data at all: $($noDataVMs -join ', ')"
     }

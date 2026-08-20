@@ -1,6 +1,12 @@
-# VMware Utilization Collector
+# Infrastructure Discovery Collectors
 
-This PowerShell script collects virtual machine utilization statistics from VMware vCenter or a standalone ESXi host and writes the results to CSV files.
+This repository contains three discovery collectors:
+
+- `Get-VMwareUtilizationStats.ps1` for VMware VM utilization and Azure Migrate import shaping.
+- `Get-WindowsServerInventory.ps1` for Windows Server role, feature, service, software, task, and certificate inventory.
+- `Get-SQLServer2016Stats.sql` for SQL Server estate, dependency, SSIS, and SSRS discovery.
+
+The VMware collector writes CSV outputs from vCenter or a standalone ESXi host.
 
 It is intended for discovery and planning work, such as understanding how busy VMs have been before sizing or migration decisions.
 
@@ -184,6 +190,33 @@ Allowed range:
 
 This does not make the script run for 60 minutes. It asks VMware for the latest retained real-time samples, up to that many minutes back.
 
+### AzureMigrateCsv
+
+Emits an additional file named `AzureMigrateImport.csv` using the Azure Migrate server-import style columns.
+
+Example:
+
+```powershell
+-AzureMigrateCsv
+```
+
+The mapping is deliberate:
+
+- Single-value utilization fields use the configured percentile (default P95).
+- Peak fields use the window maximum.
+
+This avoids manual average-vs-maximum choices during import preparation.
+
+### Percentile
+
+Controls which percentile is used for P-columns and Azure Migrate single-value fields.
+
+Default:
+
+```powershell
+-Percentile 95
+```
+
 ### BatchSize
 
 Controls how many VMs are included in each `Get-Stat` query.
@@ -250,6 +283,33 @@ The main files are:
 - `UtilizationSummary.csv`
 - `CollectionLog.txt`
 
+### Raw Samples Evidence Export
+
+If you include `-IncludeRawSamples`, the script also writes `RawSamples.csv`.
+
+This file contains each retained sample point returned by VMware, including:
+
+- VM name
+- Metric ID
+- UTC timestamp
+- Sample interval in seconds
+- Raw value and converted value
+- Disk instance (for per-disk counters)
+- Segment metadata
+
+Use this file as an evidence trail when validating percentile values in the summary.
+
+### Percentile Behavior and Limitation
+
+The script computes percentile columns (for example P95) using the nearest-rank method over all retained samples in the selected collection window.
+
+Important limitation:
+
+- In standalone ESXi mode, percentiles are computed from the short retained real-time window only (normally about the last 60 minutes).
+- In vCenter historical mode, percentiles are computed from whichever rollup intervals vCenter currently retains for the requested time range. This can include mixed sample granularity (finer for recent data, coarser for older data).
+
+So P95 always reflects the best available retained data for that window, but it is not equivalent to continuous fine-grained raw telemetry over long periods when only rolled-up history is available.
+
 ### Per-Disk Output
 
 Per-disk inventory and performance are included in `UtilizationSummary.csv`, so each VM and all of its disks appear on one CSV row.
@@ -272,6 +332,17 @@ The columns for each disk include average and maximum read/write throughput and 
 The same pattern continues with `Disk 2`, `Disk 3`, and so on. Disk names, controller addresses, performance-instance identifiers, and disk sample counts are not exported.
 
 Per-disk historical counters require vCenter to retain per-device statistics. If the configured vCenter statistics level does not retain those counters, the disk inventory and sizes will still appear, but the performance fields may be empty and the disk data-status column will explain why. Standalone ESXi uses its recent real-time counters instead.
+
+### Azure Migrate Export
+
+If you include `-AzureMigrateCsv`, the script writes `AzureMigrateImport.csv` in the same output folder.
+
+This export is intended to match Azure Migrate import expectations by avoiding average/maximum column pairs for single-value utilization fields.
+
+Field selection policy:
+
+- `CPU utilization percentage`, `Memory utilization percentage`, and network throughput single-value columns are populated from `P<Percentile>` (default P95).
+- `Peak ...` columns are populated from window maximum values.
 
 ### Summary Column Order
 
@@ -337,7 +408,43 @@ Collect a recent real-time snapshot:
   -RealtimeMinutes 30
 ```
 
-## Requirements
+Collect from a standalone ESXi host and export raw samples for P95 validation:
+
+```powershell
+.\Get-VMwareUtilizationStats.ps1 `
+  -VCenterServer "esxi-host.example.com" `
+  -RealtimeMinutes 60 `
+  -IncludeRawSamples `
+  -Percentile 95 `
+  -AllowSelfSignedCertificate `
+  -OutputFolder ".\ExampleOutputs\VMwareUtilizationStats"
+```
+
+Notes:
+
+- Standalone ESXi automatically uses real-time mode.
+- This command creates both `UtilizationSummary.csv` and `RawSamples.csv` in the output folder.
+- P95 values are computed from the retained real-time sample window returned by the host.
+
+Collect from a standalone ESXi host and also emit Azure Migrate import CSV:
+
+```powershell
+.\Get-VMwareUtilizationStats.ps1 `
+  -VCenterServer "esxi-host.example.com" `
+  -RealtimeMinutes 60 `
+  -Percentile 95 `
+  -AzureMigrateCsv `
+  -AllowSelfSignedCertificate `
+  -OutputFolder ".\ExampleOutputs\VMwareUtilizationStats"
+```
+
+This command emits:
+
+- `UtilizationSummary.csv`
+- `AzureMigrateImport.csv`
+- `CollectionLog.txt`
+
+## VMware Script Requirements
 
 You need:
 
@@ -356,6 +463,98 @@ If your vCenter or ESXi host uses a self-signed certificate, you may need:
 ```powershell
 -AllowSelfSignedCertificate
 ```
+
+## Windows Server Inventory Script
+
+Script: `Get-WindowsServerInventory.ps1`
+
+### Required Access (Read-Only Scope)
+
+- Read-only Windows access on each target server through WinRM.
+- Membership that allows remote CIM, scheduled-task, certificate-store, and registry reads.
+- No local admin changes are made by the script.
+
+### How To Run
+
+By server name list:
+
+```powershell
+.\Get-WindowsServerInventory.ps1 `
+  -ServerName "server01","server02" `
+  -OutputFolder ".\ExampleOutputs\WindowsServerInventory"
+```
+
+By text file:
+
+```powershell
+.\Get-WindowsServerInventory.ps1 `
+  -ServerListFile ".\servers.txt" `
+  -UseSSL `
+  -Authentication Kerberos `
+  -OutputFolder ".\ExampleOutputs\WindowsServerInventory"
+```
+
+### Expected Outputs
+
+- `InventorySummary.csv`
+- `Roles.csv`
+- `Features.csv`
+- `Services.csv`
+- `InstalledApplications.csv`
+- `ScheduledTasks.csv`
+- `Certificates.csv`
+- `CollectionErrors.csv`
+- `CollectionLog.txt`
+
+### Data Sensitivity
+
+These outputs can contain sensitive operational information such as service accounts, installed software inventory, scheduled-task actions, certificate subjects/SANs/thumbprints, and server names.
+
+## SQL Server Discovery Script
+
+Script: `Get-SQLServer2016Stats.sql`
+
+### Required Access (Read-Only Scope)
+
+- Read-only SQL login.
+- Server-level metadata and DMV read access (commonly `VIEW SERVER STATE`).
+- Read access to `msdb` and, when present, SSISDB and ReportServer catalog metadata.
+- The script performs only SELECT-style discovery; it does not modify data.
+
+### How To Run
+
+In SSMS:
+
+- Open `Get-SQLServer2016Stats.sql`.
+- Connect to the target SQL Server instance.
+- Execute and save the single result set to CSV (for example `SqlSummary.csv`).
+
+With sqlcmd:
+
+```powershell
+sqlcmd -S "sqlhost\instance" -E -i ".\Get-SQLServer2016Stats.sql" -s "," -W -h-1 -o ".\ExampleOutputs\SQLServer2016Stats\SqlSummary.csv"
+```
+
+### Expected Output
+
+- One tabular result set (typically exported as `SqlSummary.csv`) containing server, database, storage, linked-server dependency, SSIS, and SSRS discovery fields.
+
+### Data Sensitivity
+
+This output can include linked-server names, dependency paths, SSIS package names, SQL Agent job names, SSRS report paths, listener names/IPs, and database/file layout.
+
+## Example Output Folder Layout
+
+Current repository layout keeps one top-level example folder with one subfolder per collector:
+
+```text
+ExampleOutputs/
+  VMwareUtilizationStats/
+  WindowsServerInventory/
+  SQLServer2016Stats/
+```
+
+`SQLServer2016Stats` may be empty until you export a `SqlSummary.csv` from SSMS or sqlcmd.
 
 ## Plain-English Summary
 
