@@ -495,11 +495,11 @@ If your vCenter or ESXi host uses a self-signed certificate, you may need:
 
 Script: `Get-WindowsServerInventory.ps1`
 
-### Required Access (Read-Only Scope)
+### Required Access
 
-- Read-only Windows access on each target server through WinRM.
-- Membership that allows remote CIM, scheduled-task, certificate-store, and registry reads.
-- No local admin changes are made by the script.
+- **Local administrator** on each target server — required to enumerate all Windows services (`Win32_Service`), `LocalMachine` certificate stores, and the full `Uninstall` registry hive.
+- WinRM must be reachable from the collection host (HTTP port 5985 by default; HTTPS port 5986 with `-UseSSL`).
+- The script makes no changes; it is read-only on the target.
 
 ### How To Run
 
@@ -599,7 +599,7 @@ Linked-server dependency caveat:
 
 If you run the SQL script on every Availability Group node, each node can return rows for the same production database. To avoid double-counting database sizes in estate rollups:
 
-- Use the `Is primary replica` column and aggregate AG database size metrics from primary rows only (`TRUE`).
+- Use the `Replica type` column and aggregate AG database size metrics from primary rows only (`PRIMARY`).
 - Alternatively deduplicate by availability-group/database identity before summing capacity.
 
 ### Data Sensitivity
