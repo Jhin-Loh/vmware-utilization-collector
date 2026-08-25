@@ -435,6 +435,14 @@ try {
         Write-Warning "Bulk Get-View for VM configuration failed; configuration columns may be empty. $($_.Exception.Message)"
     }
 
+    # Startup assertion (outside the try above so an empty-view failure aborts instead of being swallowed as a warning): at least one view must have Config populated, otherwise every configuration column ships empty (regression check for the R3 lazy-load class of bug).
+    if ($vmViews.Count -gt 0) {
+        $viewsWithConfig = @($vmViews.Values | Where-Object { $_.Config -and $_.Config.Hardware -and $_.Config.Hardware.MemoryMB -gt 0 }).Count
+        if ($viewsWithConfig -eq 0) {
+            throw "Get-View returned $($vmViews.Count) VM view(s) but none had a populated Config.Hardware section. This usually means the account lacks read access on the VM objects, or a PowerCLI regression has broken view materialisation. Aborting to avoid shipping empty configuration columns."
+        }
+    }
+
     # Build a VMHost Cluster lookup table
     # Host MoRef -> cluster name (view-based; does not rely on the lazy VMHost property). Skipped for standalone ESXi (no clusters).
     $clusterMap = @{}
@@ -513,6 +521,17 @@ try {
     $actualEarliest = $intervalPlan[0].Start
     if (-not $isStandaloneEsxi -and -not $Realtime -and $actualEarliest -gt $StartDate) {
         Write-Warning "Requested start ($StartDate) is older than what vCenter's statistics retention currently keeps. Actual data coverage begins at $actualEarliest."
+    }
+
+    # Statistics-level warning: net.* counters need level 2, virtualdisk.* need level 3. Skipped for real-time segments where level is not meaningful.
+    foreach ($seg in $intervalPlan) {
+        if ($seg.Mode -eq 'Realtime') { continue }
+        if ($seg.Level -lt 2) {
+            Write-Warning ("vCenter statistics level for the {0}-minute interval is {1}. Network and per-disk counters will be unavailable for this segment. Ask the vCenter admin to raise Past Day / Past Week intervals to Level 2 (Level 3 for per-disk) at least 2 weeks before the collection run — see README.md 'Prerequisites'." -f $seg.IntervalMins, $seg.Level)
+        }
+        elseif ($seg.Level -lt 3) {
+            Write-Warning ("vCenter statistics level for the {0}-minute interval is {1}. Network counters will collect but per-disk IOPS/throughput will be unavailable for this segment (Level 3 required)." -f $seg.IntervalMins, $seg.Level)
+        }
     }
     Write-Host ""
 
