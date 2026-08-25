@@ -238,10 +238,10 @@ function ConvertFrom-VMwareGuestDetailedData {
 # Gather VM inventory data (OS, IPs, disks, etc.) from the VM's configuration and guest properties.
 function Get-VMInventoryData {
     [CmdletBinding()]
-    param([Parameter(Mandatory)] $VM)
+    param([Parameter(Mandatory)] $VM, $View)   # R3: $View carries configuration; $VM is only for top-level fallbacks
 
-    $config = $VM.ExtensionData.Config
-    $guest = $VM.ExtensionData.Guest
+    $config = $View.Config
+    $guest = $View.Guest
     $guestDetails = ConvertFrom-VMwareGuestDetailedData -DetailedData ([string]$guest.GuestDetailedData)
 
     $osName = @(
@@ -270,7 +270,8 @@ function Get-VMInventoryData {
     }
 
     $ipAddresses = [System.Collections.Generic.List[string]]::new()
-    foreach ($address in @($VM.Guest.IPAddress)) {
+    foreach ($address in @(@($guest.Net) | ForEach-Object { $_.IpAddress })) {
+        # R3: view-based guest NICs
         if ([string]::IsNullOrWhiteSpace($address)) { continue }
         $parsedAddress = $null
         if (-not [System.Net.IPAddress]::TryParse($address, [ref]$parsedAddress)) { continue }
@@ -301,7 +302,7 @@ function Get-VMInventoryData {
     }
 
     # GuestMemoryUsage comes from VMware Tools guest telemetry (MB) and can be null when tools are unavailable.
-    $guestMemoryUsageMB = $VM.ExtensionData.Summary.QuickStats.GuestMemoryUsage
+    $guestMemoryUsageMB = $View.Summary.QuickStats.GuestMemoryUsage
     if ($null -ne $guestMemoryUsageMB -and $guestMemoryUsageMB -ge 0 -and $config.Hardware.MemoryMB -gt 0) {
         $guestMemoryUsagePercent = [math]::Round(([double]$guestMemoryUsageMB / [double]$config.Hardware.MemoryMB) * 100, 2)
     }
@@ -311,15 +312,15 @@ function Get-VMInventoryData {
     }
 
     [PSCustomObject]@{
-        IPAddresses     = $ipAddresses -join '; '
-        OSName          = [string]$osName
-        OSVersion       = [string]$osVersion
-        OSArchitecture  = $osArchitecture
-        BootType        = $firmware
-        NetworkAdapters = [int]$VM.ExtensionData.Summary.Config.NumEthernetCards
-        NumberOfDisks   = [int]$VM.ExtensionData.Summary.Config.NumVirtualDisks
-        StorageInUseGB  = $storageInUseGB
-        GuestMemoryUsageMB = $guestMemoryUsageMB
+        IPAddresses             = $ipAddresses -join '; '
+        OSName                  = [string]$osName
+        OSVersion               = [string]$osVersion
+        OSArchitecture          = $osArchitecture
+        BootType                = $firmware
+        NetworkAdapters         = [int]$View.Summary.Config.NumEthernetCards
+        NumberOfDisks           = [int]$View.Summary.Config.NumVirtualDisks
+        StorageInUseGB          = $storageInUseGB
+        GuestMemoryUsageMB      = $guestMemoryUsageMB
         GuestMemoryUsagePercent = $guestMemoryUsagePercent
     }
 }
@@ -417,14 +418,39 @@ try {
     }
     Write-Host "Target VM scope: $($targetVMs.Count) VM(s)."
 
+    # R3 fix: PowerCLI 13.3 under PowerShell 7.6 returns VM objects whose lazy-loaded ExtensionData / VMHost
+    # properties never populate (observed: $vm.ExtensionData -eq $null while Get-View succeeds). Fetch all VM
+    # configuration in ONE bulk Get-View call keyed by MoRef.
+    $vmViews = @{}
+    try {
+        $viewProps = @('Name', 'Config.Hardware.Device', 'Config.Hardware.MemoryMB', 'Config.Firmware',
+            'Config.GuestFullName', 'Config.GuestId', 'Summary.Config.NumEthernetCards',
+            'Summary.Config.NumVirtualDisks', 'Summary.QuickStats.GuestMemoryUsage', 'Guest', 'Runtime.Host')
+        foreach ($view in (Get-View -Id @($targetVMs | ForEach-Object { $_.Id }) -Property $viewProps -Server $viConnection -ErrorAction Stop)) {
+            $vmViews[[string]$view.MoRef] = $view
+        }
+        Write-Host "Bulk configuration retrieved for $($vmViews.Count) VM(s) via Get-View."
+    }
+    catch {
+        Write-Warning "Bulk Get-View for VM configuration failed; configuration columns may be empty. $($_.Exception.Message)"
+    }
+
     # Build a VMHost Cluster lookup table
+    # Host MoRef -> cluster name (view-based; does not rely on the lazy VMHost property). Skipped for standalone ESXi (no clusters).
     $clusterMap = @{}
     if (-not $isStandaloneEsxi) {
         try {
-            foreach ($cl in (Get-Cluster -Server $viConnection -ErrorAction Stop)) {
-                foreach ($vmhost in ($cl | Get-VMHost -Server $viConnection -ErrorAction Stop)) {
-                    $clusterMap[$vmhost.Name] = $cl.Name
+            $clusterNamesByRef = @{}
+            foreach ($cv in (Get-View -ViewType ClusterComputeResource -Property Name -Server $viConnection -ErrorAction Stop)) {
+                $clusterNamesByRef[[string]$cv.MoRef] = $cv.Name
+            }
+            foreach ($hv in (Get-View -ViewType HostSystem -Property Name, Parent -Server $viConnection -ErrorAction Stop)) {
+                if ($hv.Parent -and $clusterNamesByRef.ContainsKey([string]$hv.Parent)) {
+                    $clusterMap[[string]$hv.MoRef] = $clusterNamesByRef[[string]$hv.Parent]
                 }
+            }
+            if ($clusterMap.Count -eq 0) {
+                Write-Warning "No clusters visible to this account; the Cluster column will show '(unknown)' for all VMs."
             }
         }
         catch {
@@ -438,7 +464,9 @@ try {
     if ($isStandaloneEsxi -or $Realtime) {
         $realtimeSampleSeconds = 20
         try {
-            $providerSummary = $perfManager.QueryPerfProviderSummary($targetVMs[0].ExtensionData.MoRef)
+            # R3: use the bulk-fetched view's MoRef so this works when lazy ExtensionData is null.
+            $probeMoRef = if ($vmViews.Count -gt 0) { ($vmViews.Values | Select-Object -First 1).MoRef } else { $targetVMs[0].ExtensionData.MoRef }
+            $providerSummary = $perfManager.QueryPerfProviderSummary($probeMoRef)
             if ($providerSummary.RefreshRate -gt 0) {
                 $realtimeSampleSeconds = [int]$providerSummary.RefreshRate
             }
@@ -529,8 +557,29 @@ try {
                 }
             }
             catch {
-                Write-Warning "Batch $batchIndex ($($segment.Start) -> $($segment.Finish)) failed: $($_.Exception.Message)"
-                $batchErrorCount++
+                # R1 fix: Get-Stat throws if ANY requested counter is missing for ANY entity in the batch
+                # (e.g. net.* requires vCenter statistics level 2; virtualdisk.* level 3). Retry metric-by-metric
+                # so the counters that DO exist at the configured statistics level are still collected.
+                Write-Warning "Batch $batchIndex combined query failed ($($_.Exception.Message.Trim())); retrying per-metric."
+                $statResults = @(foreach ($statId in $StatIds) {
+                        try {
+                            if ($segment.Mode -eq 'Realtime') {
+                                Get-Stat -Entity $batch -Stat $statId -Realtime -MaxSamples $segment.MaxSamples `
+                                    -Instance '' -Server $viConnection -ErrorAction Stop
+                            }
+                            else {
+                                Get-Stat -Entity $batch -Stat $statId -Start $segment.Start -Finish $segment.Finish `
+                                    -IntervalMins $segment.IntervalMins -Instance '' -Server $viConnection -ErrorAction Stop
+                            }
+                        }
+                        catch {
+                            Write-Warning "  Counter '$statId' unavailable for batch $batchIndex (vCenter statistics level likely too low); skipped."
+                        }
+                    })
+                if (-not $statResults) {
+                    Write-Warning "Batch $batchIndex ($($segment.Start) -> $($segment.Finish)) returned no data for any counter."
+                    $batchErrorCount++
+                }
             }
 
             # Per-disk collection runs even if the main-stat call failed, so its own error counter can fire.
@@ -546,8 +595,26 @@ try {
                 }
             }
             catch {
-                Write-Warning "Per-disk statistics failed for batch ${batchIndex}: $($_.Exception.Message)"
-                $perDiskCollectionErrorCount++
+                # R1 fix (per-disk): same metric-by-metric retry as the main counters above.
+                Write-Warning "Per-disk combined query failed for batch ${batchIndex} ($($_.Exception.Message.Trim())); retrying per-metric."
+                $perDiskStatResults = @(foreach ($statId in $PerDiskStatIds) {
+                        try {
+                            if ($segment.Mode -eq 'Realtime') {
+                                Get-Stat -Entity $batch -Stat $statId -Realtime -MaxSamples $segment.MaxSamples `
+                                    -Server $viConnection -ErrorAction Stop
+                            }
+                            else {
+                                Get-Stat -Entity $batch -Stat $statId -Start $segment.Start -Finish $segment.Finish `
+                                    -IntervalMins $segment.IntervalMins -Server $viConnection -ErrorAction Stop
+                            }
+                        }
+                        catch {
+                            Write-Warning "  Per-disk counter '$statId' unavailable for batch ${batchIndex}; skipped."
+                        }
+                    })
+                if (-not $perDiskStatResults) {
+                    $perDiskCollectionErrorCount++
+                }
             }
 
             if (-not $statResults -and -not $perDiskStatResults) { continue }
@@ -645,14 +712,15 @@ try {
 
     # Build the per-VM summary (Avg / Max per metric)
     $summaryRows = foreach ($vm in $targetVMs) {
-        $inventory = Get-VMInventoryData -VM $vm
+        $vmView = $vmViews[[string]$vm.Id]
+        $inventory = Get-VMInventoryData -VM $vm -View $vmView
         $row = [ordered]@{
             'Server name'                                    = $vm.Name
-            'Cluster'                                        = if ($isStandaloneEsxi) { '(standalone ESXi)' } elseif ($clusterMap.ContainsKey($vm.VMHost.Name)) { $clusterMap[$vm.VMHost.Name] } else { '(unknown)' }
+            'Cluster'                                        = if ($isStandaloneEsxi) { '(standalone ESXi)' } elseif ($vmView -and $vmView.Runtime.Host -and $clusterMap.ContainsKey([string]$vmView.Runtime.Host)) { $clusterMap[[string]$vmView.Runtime.Host] } else { '(unknown)' }   # R2+R3: view-based host lookup; null-safe
             'IP addresses'                                   = $inventory.IPAddresses
             'PowerState'                                     = $vm.PowerState.ToString()
             'Cores'                                          = $vm.NumCpu
-            'Memory (In MB)'                                 = [int]$vm.ExtensionData.Config.Hardware.MemoryMB
+            'Memory (In MB)'                                 = [int]$vmView.Config.Hardware.MemoryMB
             'Guest memory usage current (MB)'                = $inventory.GuestMemoryUsageMB
             'Guest memory usage current percentage'          = $inventory.GuestMemoryUsagePercent
             'OS name'                                        = $inventory.OSName
@@ -720,7 +788,8 @@ try {
 
     # Collect the inventory and statistics that will become Disk 1, Disk 2, etc.
     $diskSummaryRows = foreach ($vm in $targetVMs) {
-        $allDevices = @($vm.ExtensionData.Config.Hardware.Device)
+        $vmView = $vmViews[[string]$vm.Id]
+        $allDevices = @($vmView.Config.Hardware.Device)
         $virtualDisks = @($allDevices | Where-Object {
                 $_.DeviceInfo.Label -like 'Hard disk *' -and $null -ne $_.CapacityInKB
             } | Sort-Object @{ Expression = {
@@ -809,23 +878,23 @@ try {
     }
 
     $diskColumnMap = [ordered]@{
-        'size (In GB)'                                    = 'CapacityGB'
-        'read throughput average (MB per second)'         = 'ReadThroughput_MBps_Avg'
-        'read throughput maximum (MB per second)'         = 'ReadThroughput_MBps_Max'
-        "read throughput P$Percentile (MB per second)"    = "ReadThroughput_MBps_P$Percentile"
-        'write throughput average (MB per second)'        = 'WriteThroughput_MBps_Avg'
-        'write throughput maximum (MB per second)'        = 'WriteThroughput_MBps_Max'
-        "write throughput P$Percentile (MB per second)"   = "WriteThroughput_MBps_P$Percentile"
-        'read ops average (operations per second)'        = 'ReadIOPS_Avg'
-        'read ops maximum (operations per second)'        = 'ReadIOPS_Max'
-        "read ops P$Percentile (operations per second)"   = "ReadIOPS_P$Percentile"
-        'write ops average (operations per second)'       = 'WriteIOPS_Avg'
-        'write ops maximum (operations per second)'       = 'WriteIOPS_Max'
-        "write ops P$Percentile (operations per second)"  = "WriteIOPS_P$Percentile"
-        'data status'                                     = 'DataStatus'
+        'size (In GB)'                                   = 'CapacityGB'
+        'read throughput average (MB per second)'        = 'ReadThroughput_MBps_Avg'
+        'read throughput maximum (MB per second)'        = 'ReadThroughput_MBps_Max'
+        "read throughput P$Percentile (MB per second)"   = "ReadThroughput_MBps_P$Percentile"
+        'write throughput average (MB per second)'       = 'WriteThroughput_MBps_Avg'
+        'write throughput maximum (MB per second)'       = 'WriteThroughput_MBps_Max'
+        "write throughput P$Percentile (MB per second)"  = "WriteThroughput_MBps_P$Percentile"
+        'read ops average (operations per second)'       = 'ReadIOPS_Avg'
+        'read ops maximum (operations per second)'       = 'ReadIOPS_Max'
+        "read ops P$Percentile (operations per second)"  = "ReadIOPS_P$Percentile"
+        'write ops average (operations per second)'      = 'WriteIOPS_Avg'
+        'write ops maximum (operations per second)'      = 'WriteIOPS_Max'
+        "write ops P$Percentile (operations per second)" = "WriteIOPS_P$Percentile"
+        'data status'                                    = 'DataStatus'
     }
     $maxDiskNumber = [int](($diskSummaryRows | Measure-Object -Property DiskNumber -Maximum).Maximum)
-    $anyDiskInInventory = @($targetVMs | Where-Object { [int]$_.ExtensionData.Summary.Config.NumVirtualDisks -gt 0 }).Count -gt 0
+    $anyDiskInInventory = @($vmViews.Values | Where-Object { [int]$_.Summary.Config.NumVirtualDisks -gt 0 }).Count -gt 0   # R3: view-based
     if ($maxDiskNumber -le 0 -and $anyDiskInInventory) {
         Write-Warning "No numbered 'Hard disk N' labels resolved on any VM; per-disk columns will be omitted from UtilizationSummary.csv. Check the vCenter statistics level (per-VM-device counters must be enabled)."
     }
@@ -864,7 +933,7 @@ try {
         }
         else {
             [PSCustomObject][ordered]@{ VMName = $null; MetricId = $null; TimestampUtc = $null; SampleIntervalSeconds = $null; RawValue = $null; ConvertedValue = $null; Unit = $null; 'Disk instance' = $null; SegmentLevel = $null; SegmentIntervalMinutes = $null } |
-                ConvertTo-Csv -NoTypeInformation | Select-Object -First 1 | Set-Content -Path $rawPath -Encoding UTF8
+            ConvertTo-Csv -NoTypeInformation | Select-Object -First 1 | Set-Content -Path $rawPath -Encoding UTF8
             Write-Host "Raw samples CSV      : $rawPath (empty header only)"
         }
     }
@@ -873,26 +942,26 @@ try {
         $azmPath = Join-Path $OutputFolder 'AzureMigrateImport.csv'
         $azmRows = foreach ($row in $summaryRows) {
             [PSCustomObject][ordered]@{
-                'Server name'                                = $row.'Server name'
-                'IP addresses'                               = $row.'IP addresses'
-                'Cores'                                      = $row.'Cores'
-                'Memory (In MB)'                             = $row.'Memory (In MB)'
-                'OS name'                                    = $row.'OS name'
-                'OS version'                                 = $row.'OS version'
-                'OS architecture'                            = $row.'OS architecture'
-                'Server type'                                = $row.'Server type'
-                'Hypervisor'                                 = $row.'Hypervisor'
-                'CPU utilization percentage'                 = $row."CPU utilization percentage P$Percentile"
-                'Peak CPU utilization percentage'            = $row.'CPU utilization percentage maximum'
-                'Memory utilization percentage'              = $row."Memory active percentage P$Percentile"
-                'Peak memory utilization percentage'         = $row.'Memory active percentage maximum'
-                'Network In throughput (MB per second)'      = $row."Network In throughput P$Percentile (MB per second)"
-                'Peak Network In throughput (MB per second)' = $row.'Network In throughput maximum (MB per second)'
-                'Network Out throughput (MB per second)'     = $row."Network Out throughput P$Percentile (MB per second)"
-                'Peak Network Out throughput (MB per second)'= $row.'Network Out throughput maximum (MB per second)'
-                'Boot Type'                                  = $row.'Boot Type'
-                'Number of disks'                            = $row.'Number of disks'
-                'Storage in use (In GB)'                     = $row.'Storage in use (In GB)'
+                'Server name'                                 = $row.'Server name'
+                'IP addresses'                                = $row.'IP addresses'
+                'Cores'                                       = $row.'Cores'
+                'Memory (In MB)'                              = $row.'Memory (In MB)'
+                'OS name'                                     = $row.'OS name'
+                'OS version'                                  = $row.'OS version'
+                'OS architecture'                             = $row.'OS architecture'
+                'Server type'                                 = $row.'Server type'
+                'Hypervisor'                                  = $row.'Hypervisor'
+                'CPU utilization percentage'                  = $row."CPU utilization percentage P$Percentile"
+                'Peak CPU utilization percentage'             = $row.'CPU utilization percentage maximum'
+                'Memory utilization percentage'               = $row."Memory active percentage P$Percentile"
+                'Peak memory utilization percentage'          = $row.'Memory active percentage maximum'
+                'Network In throughput (MB per second)'       = $row."Network In throughput P$Percentile (MB per second)"
+                'Peak Network In throughput (MB per second)'  = $row.'Network In throughput maximum (MB per second)'
+                'Network Out throughput (MB per second)'      = $row."Network Out throughput P$Percentile (MB per second)"
+                'Peak Network Out throughput (MB per second)' = $row.'Network Out throughput maximum (MB per second)'
+                'Boot Type'                                   = $row.'Boot Type'
+                'Number of disks'                             = $row.'Number of disks'
+                'Storage in use (In GB)'                      = $row.'Storage in use (In GB)'
             }
         }
         $azmRows | Export-Csv -Path $azmPath -NoTypeInformation
