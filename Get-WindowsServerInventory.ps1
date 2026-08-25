@@ -353,7 +353,8 @@ try {
 
     # Emit CSVs
     $exports = [ordered]@{
-        'InventorySummary.csv'      = , $summaryRows
+        # @() guards against the single-target case where $summaryRows is a scalar, and against the multi-target case where a leading comma would double-wrap the existing array and cause Export-Csv to serialise System.Array's own properties (Count, Length, Rank, etc.) instead of the row objects.
+        'InventorySummary.csv'      = @($summaryRows)
         'Roles.csv'                 = $byCategory['Role']
         'Features.csv'              = $byCategory['Feature']
         'Services.csv'              = $byCategory['Service']
