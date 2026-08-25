@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [Parameter(Mandatory = $true, HelpMessage = "FQDN or IP address of the vCenter Server or standalone ESXi host.")]
     [Alias('VIServer')]
@@ -527,7 +527,7 @@ try {
     foreach ($seg in $intervalPlan) {
         if ($seg.Mode -eq 'Realtime') { continue }
         if ($seg.Level -lt 2) {
-            Write-Warning ("vCenter statistics level for the {0}-minute interval is {1}. Network and per-disk counters will be unavailable for this segment. Ask the vCenter admin to raise Past Day / Past Week intervals to Level 2 (Level 3 for per-disk) at least 2 weeks before the collection run — see README.md 'Prerequisites'." -f $seg.IntervalMins, $seg.Level)
+            Write-Warning ("vCenter statistics level for the {0}-minute interval is {1}. Network and per-disk counters will be unavailable for this segment. Ask the vCenter admin to raise Past Day / Past Week intervals to Level 2 (Level 3 for per-disk) at least 2 weeks before the collection run - see README.md 'Prerequisites'." -f $seg.IntervalMins, $seg.Level)
         }
         elseif ($seg.Level -lt 3) {
             Write-Warning ("vCenter statistics level for the {0}-minute interval is {1}. Network counters will collect but per-disk IOPS/throughput will be unavailable for this segment (Level 3 required)." -f $seg.IntervalMins, $seg.Level)
@@ -1020,3 +1020,4 @@ finally {
     }
     Stop-Transcript -ErrorAction SilentlyContinue | Out-Null
 }
+
