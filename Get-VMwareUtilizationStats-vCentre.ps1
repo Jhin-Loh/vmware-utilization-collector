@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [Parameter(Mandatory = $true, HelpMessage = "FQDN or IP address of the vCenter Server.")]
     [Alias('VIServer')]
@@ -20,7 +20,7 @@ param(
     [Parameter(HelpMessage = "Only collect stats for VMs in these cluster(s). Default = all clusters.")]
     [string[]]$ClusterName,
 
-    [Parameter(HelpMessage = "Only collect stats for VMs matching these name(s)/pattern(s). Default = all VMs.")]
+    [Parameter(HelpMessage = "Only collect stats for these exact (case-insensitive) VM names. Fails fast if any name does not resolve to exactly one VM. Default = all VMs.")]
     [string[]]$VMName,
 
     [Parameter(HelpMessage = "Include powered-off VMs (they will typically show no/limited data).")]
@@ -230,10 +230,10 @@ function ConvertFrom-VMwareGuestDetailedData {
 # Gather VM inventory data (OS, IPs, disks, etc.) from the VM's configuration and guest properties.
 function Get-VMInventoryData {
     [CmdletBinding()]
-    param([Parameter(Mandatory)] $VM)
+    param([Parameter(Mandatory)] $VM, $View)
 
-    $config = $VM.ExtensionData.Config
-    $guest = $VM.ExtensionData.Guest
+    $config = $View.Config
+    $guest = $View.Guest
     $guestDetails = ConvertFrom-VMwareGuestDetailedData -DetailedData ([string]$guest.GuestDetailedData)
 
     $osName = @(
@@ -262,7 +262,7 @@ function Get-VMInventoryData {
     }
 
     $ipAddresses = [System.Collections.Generic.List[string]]::new()
-    foreach ($address in @($VM.Guest.IPAddress)) {
+    foreach ($address in @(@($guest.Net) | ForEach-Object { $_.IpAddress })) {
         if ([string]::IsNullOrWhiteSpace($address)) { continue }
         $parsedAddress = $null
         if (-not [System.Net.IPAddress]::TryParse($address, [ref]$parsedAddress)) { continue }
@@ -293,7 +293,7 @@ function Get-VMInventoryData {
     }
 
     # GuestMemoryUsage comes from VMware Tools guest telemetry (MB) and can be null when tools are unavailable.
-    $guestMemoryUsageMB = $VM.ExtensionData.Summary.QuickStats.GuestMemoryUsage
+    $guestMemoryUsageMB = $View.Summary.QuickStats.GuestMemoryUsage
     if ($null -ne $guestMemoryUsageMB -and $guestMemoryUsageMB -ge 0 -and $config.Hardware.MemoryMB -gt 0) {
         $guestMemoryUsagePercent = [math]::Round(([double]$guestMemoryUsageMB / [double]$config.Hardware.MemoryMB) * 100, 2)
     }
@@ -303,15 +303,15 @@ function Get-VMInventoryData {
     }
 
     [PSCustomObject]@{
-        IPAddresses     = $ipAddresses -join '; '
-        OSName          = [string]$osName
-        OSVersion       = [string]$osVersion
-        OSArchitecture  = $osArchitecture
-        BootType        = $firmware
-        NetworkAdapters = [int]$VM.ExtensionData.Summary.Config.NumEthernetCards
-        NumberOfDisks   = [int]$VM.ExtensionData.Summary.Config.NumVirtualDisks
-        StorageInUseGB  = $storageInUseGB
-        GuestMemoryUsageMB = $guestMemoryUsageMB
+        IPAddresses             = $ipAddresses -join '; '
+        OSName                  = [string]$osName
+        OSVersion               = [string]$osVersion
+        OSArchitecture          = $osArchitecture
+        BootType                = $firmware
+        NetworkAdapters         = [int]$View.Summary.Config.NumEthernetCards
+        NumberOfDisks           = [int]$View.Summary.Config.NumVirtualDisks
+        StorageInUseGB          = $storageInUseGB
+        GuestMemoryUsageMB      = $guestMemoryUsageMB
         GuestMemoryUsagePercent = $guestMemoryUsagePercent
     }
 }
@@ -388,31 +388,113 @@ try {
     if ($ClusterName) {
         $vmParams['Location'] = Get-Cluster -Name $ClusterName -Server $viConnection -ErrorAction Stop
     }
+
     if ($VMName) {
-        $vmParams['Name'] = $VMName
+        # Resolve each requested name individually so we can distinguish typos (0 matches) from name collisions (>1 match) and report all bad names in one shot.
+        $resolvedVMs = [System.Collections.Generic.List[object]]::new()
+        $missingNames = [System.Collections.Generic.List[string]]::new()
+        $ambiguousNames = [System.Collections.Generic.List[object]]::new()
+
+        foreach ($requested in $VMName) {
+            $candidates = @(Get-VM @vmParams -Name $requested -ErrorAction SilentlyContinue |
+                Where-Object { [string]::Equals($_.Name, $requested, [System.StringComparison]::OrdinalIgnoreCase) })
+            if ($candidates.Count -eq 0) {
+                $missingNames.Add($requested)
+            }
+            elseif ($candidates.Count -gt 1) {
+                $ambiguousNames.Add([PSCustomObject]@{ Name = $requested; Matches = $candidates })
+            }
+            else {
+                $resolvedVMs.Add($candidates[0])
+            }
+        }
+
+        if ($missingNames.Count -gt 0 -or $ambiguousNames.Count -gt 0) {
+            $lines = [System.Collections.Generic.List[string]]::new()
+            $lines.Add("VM name resolution failed:")
+            foreach ($m in $missingNames) { $lines.Add("  - No VM exactly matches '$m' in the current scope.") }
+            foreach ($a in $ambiguousNames) {
+                $duplicates = ($a.Matches | ForEach-Object { "$($_.Name) [$($_.Id)]" }) -join ', '
+                $lines.Add("  - Ambiguous name '$($a.Name)' matches multiple VMs: $duplicates. Add -ClusterName to disambiguate.")
+            }
+            throw ($lines -join [Environment]::NewLine)
+        }
+
+        $targetVMs = @($resolvedVMs | Sort-Object -Property Id -Unique)
     }
-    # Include powered-off VMs by default; filter them out later if -IncludePoweredOffVMs is not specified.
-    $targetVMs = @(Get-VM @vmParams -ErrorAction Stop)
+    else {
+        $targetVMs = @(Get-VM @vmParams -ErrorAction Stop)
+    }
+
     if (-not $IncludePoweredOffVMs) {
+        $droppedPoweredOff = @($targetVMs | Where-Object { $_.PowerState -ne 'PoweredOn' })
         $targetVMs = @($targetVMs | Where-Object { $_.PowerState -eq 'PoweredOn' })
+        if ($VMName -and $droppedPoweredOff.Count -gt 0) {
+            $droppedNames = ($droppedPoweredOff | ForEach-Object { $_.Name }) -join ', '
+            throw "$($droppedPoweredOff.Count) explicitly-named VM(s) are powered off and were dropped by the default power-state filter: $droppedNames. Re-run with -IncludePoweredOffVMs to keep them."
+        }
     }
     if ($targetVMs.Count -eq 0) {
         throw "No VMs matched the requested scope (ClusterName/VMName/power state filters)."
     }
     Write-Host "Target VM scope: $($targetVMs.Count) VM(s)."
 
-    # Build a VMHost Cluster lookup table
+    $vmViews = @{}
+    try {
+        $viewProps = @('Name', 'Config.Hardware.Device', 'Config.Hardware.MemoryMB', 'Config.Firmware',
+            'Config.GuestFullName', 'Config.GuestId', 'Summary.Config.NumEthernetCards',
+            'Summary.Config.NumVirtualDisks', 'Summary.QuickStats.GuestMemoryUsage', 'Guest', 'Runtime.Host')
+        foreach ($view in (Get-View -Id @($targetVMs | ForEach-Object { $_.Id }) -Property $viewProps -Server $viConnection -ErrorAction Stop)) {
+            $vmViews[[string]$view.MoRef] = $view
+        }
+        Write-Host "Bulk configuration retrieved for $($vmViews.Count) VM(s) via Get-View."
+    }
+    catch {
+        Write-Warning "Bulk Get-View for VM configuration failed; configuration columns may be empty. $($_.Exception.Message)"
+    }
+
+    if ($vmViews.Count -gt 0) {
+        $viewsWithConfig = @($vmViews.Values | Where-Object { $_.Config -and $_.Config.Hardware -and $_.Config.Hardware.MemoryMB -gt 0 }).Count
+        if ($viewsWithConfig -eq 0) {
+            throw "Get-View returned $($vmViews.Count) VM view(s) but none had a populated Config.Hardware section. This usually means the account lacks read access on the VM objects, or a PowerCLI regression has broken view materialisation. Aborting to avoid shipping empty configuration columns."
+        }
+    }
+
     $clusterMap = @{}
     try {
-        foreach ($cl in (Get-Cluster -Server $viConnection -ErrorAction Stop)) {
-            foreach ($vmhost in ($cl | Get-VMHost -Server $viConnection -ErrorAction Stop)) {
-                $clusterMap[$vmhost.Name] = $cl.Name
+        $clusterNamesByRef = @{}
+        foreach ($cv in (Get-View -ViewType ClusterComputeResource -Property Name -Server $viConnection -ErrorAction Stop)) {
+            $clusterNamesByRef[[string]$cv.MoRef] = $cv.Name
+        }
+        foreach ($hv in (Get-View -ViewType HostSystem -Property Name, Parent -Server $viConnection -ErrorAction Stop)) {
+            if ($hv.Parent -and $clusterNamesByRef.ContainsKey([string]$hv.Parent)) {
+                $clusterMap[[string]$hv.MoRef] = $clusterNamesByRef[[string]$hv.Parent]
             }
+        }
+        if ($clusterMap.Count -eq 0) {
+            Write-Warning "No clusters visible to this account; the Cluster column will show '(unknown)' for all VMs."
         }
     }
     catch {
         Write-Warning "Could not fully resolve cluster membership; Cluster column may show '(unknown)'. $_"
     }
+
+    Write-Host ""
+    Write-Host "Resolved VM scope:" -ForegroundColor Cyan
+    $scopePreview = foreach ($vm in $targetVMs) {
+        $vmView = $vmViews[[string]$vm.Id]
+        $cluster = if ($vmView -and $vmView.Runtime.Host -and $clusterMap.ContainsKey([string]$vmView.Runtime.Host)) {
+            $clusterMap[[string]$vmView.Runtime.Host]
+        }
+        else { '(unknown)' }
+        [PSCustomObject]@{
+            Name       = $vm.Name
+            MoRef      = [string]$vm.Id
+            Cluster    = $cluster
+            PowerState = $vm.PowerState.ToString()
+        }
+    }
+    $scopePreview | Sort-Object Name | Format-Table -AutoSize | Out-String | Write-Host
 
     # vCenter stores historical rollups used to build the collection plan.
     $perfManager = Get-View -Server $viConnection -Id $serviceInstance.Content.PerfManager
@@ -430,6 +512,16 @@ try {
     $actualEarliest = $intervalPlan[0].Start
     if ($actualEarliest -gt $StartDate) {
         Write-Warning "Requested start ($StartDate) is older than what vCenter's statistics retention currently keeps. Actual data coverage begins at $actualEarliest."
+    }
+
+    # Statistics-level warning: net.* counters need level 2, virtualdisk.* need level 3. Warn per interval so the transcript records what will be missing before collection starts.
+    foreach ($seg in $intervalPlan) {
+        if ($seg.Level -lt 2) {
+            Write-Warning ("vCenter statistics level for the {0}-minute interval is {1}. Network and per-disk counters will be unavailable for this segment. Ask the vCenter admin to raise Past Day / Past Week intervals to Level 2 (Level 3 for per-disk) at least 2 weeks before the collection run - see README.md 'Prerequisites'." -f $seg.IntervalMins, $seg.Level)
+        }
+        elseif ($seg.Level -lt 3) {
+            Write-Warning ("vCenter statistics level for the {0}-minute interval is {1}. Network counters will collect but per-disk IOPS/throughput will be unavailable for this segment (Level 3 required)." -f $seg.IntervalMins, $seg.Level)
+        }
     }
     Write-Host ""
 
@@ -465,8 +557,20 @@ try {
                 )
             }
             catch {
-                Write-Warning "Batch $batchIndex ($($segment.Start) -> $($segment.Finish)) failed: $($_.Exception.Message)"
-                $batchErrorCount++
+                Write-Warning "Batch $batchIndex combined query failed ($($_.Exception.Message.Trim())); retrying per-metric."
+                $statResults = @(foreach ($statId in $StatIds) {
+                        try {
+                            Get-Stat -Entity $batch -Stat $statId -Start $segment.Start -Finish $segment.Finish `
+                                -IntervalMins $segment.IntervalMins -Instance '' -Server $viConnection -ErrorAction Stop
+                        }
+                        catch {
+                            Write-Warning "  Counter '$statId' unavailable for batch $batchIndex (vCenter statistics level likely too low); skipped."
+                        }
+                    })
+                if (-not $statResults) {
+                    Write-Warning "Batch $batchIndex ($($segment.Start) -> $($segment.Finish)) returned no data for any counter."
+                    $batchErrorCount++
+                }
             }
 
             # Per-disk collection runs even if the main-stat call failed, so its own error counter can fire.
@@ -476,8 +580,19 @@ try {
                         -IntervalMins $segment.IntervalMins -Server $viConnection -ErrorAction Stop)
             }
             catch {
-                Write-Warning "Per-disk statistics failed for batch ${batchIndex}: $($_.Exception.Message)"
-                $perDiskCollectionErrorCount++
+                Write-Warning "Per-disk combined query failed for batch ${batchIndex} ($($_.Exception.Message.Trim())); retrying per-metric."
+                $perDiskStatResults = @(foreach ($statId in $PerDiskStatIds) {
+                        try {
+                            Get-Stat -Entity $batch -Stat $statId -Start $segment.Start -Finish $segment.Finish `
+                                -IntervalMins $segment.IntervalMins -Server $viConnection -ErrorAction Stop
+                        }
+                        catch {
+                            Write-Warning "  Per-disk counter '$statId' unavailable for batch ${batchIndex}; skipped."
+                        }
+                    })
+                if (-not $perDiskStatResults) {
+                    $perDiskCollectionErrorCount++
+                }
             }
 
             if (-not $statResults -and -not $perDiskStatResults) { continue }
@@ -575,14 +690,14 @@ try {
 
     # Build the per-VM summary (Avg / Max per metric)
     $summaryRows = foreach ($vm in $targetVMs) {
-        $inventory = Get-VMInventoryData -VM $vm
+        $vmView = $vmViews[[string]$vm.Id]
+        $inventory = Get-VMInventoryData -VM $vm -View $vmView
         $row = [ordered]@{
             'Server name'                                    = $vm.Name
-            'Cluster'                                        = if ($clusterMap.ContainsKey($vm.VMHost.Name)) { $clusterMap[$vm.VMHost.Name] } else { '(unknown)' }
-            'IP addresses'                                   = $inventory.IPAddresses
+            'Cluster'                                        = if ($vmView -and $vmView.Runtime.Host -and $clusterMap.ContainsKey([string]$vmView.Runtime.Host)) { $clusterMap[[string]$vmView.Runtime.Host] } else { '(unknown)' }
             'PowerState'                                     = $vm.PowerState.ToString()
             'Cores'                                          = $vm.NumCpu
-            'Memory (In MB)'                                 = [int]$vm.ExtensionData.Config.Hardware.MemoryMB
+            'Memory (In MB)'                                 = [int]$vmView.Config.Hardware.MemoryMB
             'Guest memory usage current (MB)'                = $inventory.GuestMemoryUsageMB
             'Guest memory usage current percentage'          = $inventory.GuestMemoryUsagePercent
             'OS name'                                        = $inventory.OSName
@@ -651,7 +766,8 @@ try {
 
     # Collect the inventory and statistics that will become Disk 1, Disk 2, etc.
     $diskSummaryRows = foreach ($vm in $targetVMs) {
-        $allDevices = @($vm.ExtensionData.Config.Hardware.Device)
+        $vmView = $vmViews[[string]$vm.Id]
+        $allDevices = @($vmView.Config.Hardware.Device)
         $virtualDisks = @($allDevices | Where-Object {
                 $_.DeviceInfo.Label -like 'Hard disk *' -and $null -ne $_.CapacityInKB
             } | Sort-Object @{ Expression = {
@@ -756,7 +872,7 @@ try {
         'data status'                                    = 'DataStatus'
     }
     $maxDiskNumber = [int](($diskSummaryRows | Measure-Object -Property DiskNumber -Maximum).Maximum)
-    $anyDiskInInventory = @($targetVMs | Where-Object { [int]$_.ExtensionData.Summary.Config.NumVirtualDisks -gt 0 }).Count -gt 0
+    $anyDiskInInventory = @($vmViews.Values | Where-Object { [int]$_.Summary.Config.NumVirtualDisks -gt 0 }).Count -gt 0
     if ($maxDiskNumber -le 0 -and $anyDiskInInventory) {
         Write-Warning "No numbered 'Hard disk N' labels resolved on any VM; per-disk columns will be omitted from UtilizationSummary.csv. Check the vCenter statistics level (per-VM-device counters must be enabled)."
     }
@@ -795,7 +911,7 @@ try {
         }
         else {
             [PSCustomObject][ordered]@{ VMName = $null; MetricId = $null; TimestampUtc = $null; SampleIntervalSeconds = $null; RawValue = $null; ConvertedValue = $null; Unit = $null; 'Disk instance' = $null; SegmentLevel = $null; SegmentIntervalMinutes = $null } |
-                ConvertTo-Csv -NoTypeInformation | Select-Object -First 1 | Set-Content -Path $rawPath -Encoding UTF8
+            ConvertTo-Csv -NoTypeInformation | Select-Object -First 1 | Set-Content -Path $rawPath -Encoding UTF8
             Write-Host "Raw samples CSV      : $rawPath (empty header only)"
         }
     }
